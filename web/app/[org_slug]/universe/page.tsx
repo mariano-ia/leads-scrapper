@@ -3,10 +3,11 @@ import { Badge } from "@/components/ui/badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatNumber, formatDate } from "@/lib/utils";
+import { UniverseEditor } from "./universe-editor";
 
 export default async function UniversePage({ params }: { params: { org_slug: string } }) {
   const user = await requireAuth();
-  const { org } = await requireOrgMembership(params.org_slug, user.id);
+  const { org, role } = await requireOrgMembership(params.org_slug, user.id);
   const svc = createSupabaseServiceClient();
 
   const [target, masterRes, allTargets, companiesCount] = await Promise.all([
@@ -21,9 +22,12 @@ export default async function UniversePage({ params }: { params: { org_slug: str
 
   return (
     <div className="space-y-4 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold">Universe target</h1>
-        <p className="text-sm text-muted-foreground">Filtro local sobre el universo maestro de Apollo · sin costo de créditos</p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-semibold">Universe target</h1>
+          <p className="text-sm text-muted-foreground">Filtro local sobre el universo maestro de Apollo · sin costo de créditos</p>
+        </div>
+        <UniverseEditor orgSlug={org.slug} initial={targetConfig} canEdit={role === "admin"} />
       </div>
 
       <Card>

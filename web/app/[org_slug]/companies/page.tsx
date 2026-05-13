@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Search, ArrowRight, Linkedin, ExternalLink } from "lucide-react";
+import { Search, ArrowRight, Linkedin, ExternalLink, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -42,7 +42,7 @@ export default async function CompaniesPage({
   let query = svc
     .from("companies")
     .select(
-      "id, name:razon_social, primary_domain:dominio, linkedin_url, founded_year, organization_revenue, organization_revenue_printed, organization_headcount_twelve_month_growth, organization_headcount_twenty_four_month_growth",
+      "id, name:razon_social, primary_domain:dominio, linkedin_url, founded_year, organization_revenue, organization_revenue_printed, organization_headcount_twelve_month_growth, organization_headcount_twenty_four_month_growth, sector, headcount_range, location_ciudad, ai_brief, intent_strength",
       { count: "exact" }
     )
     .eq("status", "active")
@@ -122,7 +122,15 @@ export default async function CompaniesPage({
                         <Linkedin className="h-3.5 w-3.5" />
                       </a>
                     )}
+                    {c.ai_brief && <Sparkles className="h-3.5 w-3.5 text-blue-600" />}
                   </div>
+                  {(c.sector || c.headcount_range || c.location_ciudad) && (
+                    <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+                      {c.sector && <span>{c.sector}</span>}
+                      {c.headcount_range && <span>· {c.headcount_range} emp</span>}
+                      {c.location_ciudad && <span>· {c.location_ciudad}</span>}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {c.primary_domain ? (

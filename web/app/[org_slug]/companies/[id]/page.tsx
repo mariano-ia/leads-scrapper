@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatPercent, formatDate, timeAgo } from "@/lib/utils";
+import { CompanyActions } from "./action-buttons";
 
 export default async function CompanyDetailPage({
   params,
@@ -41,11 +42,12 @@ export default async function CompanyDetailPage({
             Volver
           </Button>
         </Link>
-        {!isEnriched && (
-          <Button variant="outline" size="sm" disabled>
-            Enrich con Apollo (1 crédito) — próximo
-          </Button>
-        )}
+        <CompanyActions
+          orgSlug={org.slug}
+          companyId={company.id}
+          needsEnrich={!isEnriched}
+          needsBrief={!company.ai_brief}
+        />
       </div>
 
       <div className="flex justify-between items-start gap-6">

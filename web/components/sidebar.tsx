@@ -11,6 +11,7 @@ import {
   Settings,
   Bell,
   Shield,
+  Radar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ export function Sidebar({ orgSlug, orgName, role, isSuperAdmin }: SidebarProps) 
 
   const navItems = [
     { href: `${base}/dashboard`, label: "Dashboard", icon: LayoutDashboard },
+    { href: `${base}/radar`, label: "Radar", icon: Radar },
     { href: `${base}/companies`, label: "Companies", icon: Building2 },
     { href: `${base}/searches`, label: "Searches", icon: Search },
     { href: `${base}/alerts`, label: "Alerts", icon: Bell },
