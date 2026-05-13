@@ -262,18 +262,28 @@ export async function fetchContactsAction(
     }
 
     // STEP 2 — priorizar candidatos: score por título × has_email, top `max`.
-    const ranked = allPeople
+    // Estrategia con fallback: primero intentamos decisores (score >= 0.5).
+    // Si no hay ninguno, traemos los disponibles de menor a mayor score,
+    // priorizando los que tienen email — para que el usuario al menos tenga
+    // contactos en lugar de un error.
+    const scored = allPeople
       .map((p) => ({
         person: p,
         score: titleScore(p.title) * (p.has_email ? 1 : 0.2),
       }))
-      .filter((x) => x.score >= 0.5)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, max);
+      .sort((a, b) => b.score - a.score);
+
+    let usedFallback = false;
+    let ranked = scored.filter((x) => x.score >= 0.5).slice(0, max);
+    if (ranked.length === 0 && scored.length > 0) {
+      // Fallback: traer los disponibles (prioriza has_email)
+      ranked = scored.slice(0, max);
+      usedFallback = true;
+    }
 
     if (ranked.length === 0) {
       return {
-        error: `Apollo encontró ${allPeople.length} personas pero ninguna con título decisional (CEO/CTO/Director/Head/Manager)`,
+        error: `Apollo no tiene personas con datos suficientes para esta empresa (${allPeople.length} indexadas, ninguna con título ni email)`,
       };
     }
 
@@ -381,6 +391,7 @@ export async function fetchContactsAction(
       valid_contacts: validContacts,
       generic_contacts: genericContacts,
       credits: creditsConsumed,
+      fallback_used: usedFallback,
     };
   } catch (e: any) {
     return { error: e?.message || "Error desconocido" };

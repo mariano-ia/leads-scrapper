@@ -69,7 +69,9 @@ export function CompanyActions({
       if (result.valid_contacts) parts.push(`${result.valid_contacts} contacto${result.valid_contacts !== 1 ? "s" : ""} válido${result.valid_contacts !== 1 ? "s" : ""}`);
       if (result.generic_contacts) parts.push(`${result.generic_contacts} genérico${result.generic_contacts !== 1 ? "s" : ""}`);
       if (result.credits) parts.push(`${result.credits} créd`);
-      toast.success(parts.join(" · ") || `${result.total_in_apollo ?? 0} en Apollo pero ninguna decisional`);
+      const base = parts.join(" · ") || `${result.total_in_apollo ?? 0} en Apollo pero ninguna decisional`;
+      const msg = result.fallback_used ? `${base} · ⚠️ sin decisores claros, fallback al staff disponible` : base;
+      toast.success(msg);
     });
   }
 

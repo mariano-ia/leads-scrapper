@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp, Database } from "lucide-react";
+import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp, Database, Info } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusSelect } from "@/components/status-select";
 import { OwnerSelect } from "@/components/owner-select";
+import { SortableHeader } from "@/components/sortable-header";
 import { RescoreButton } from "./rescore-button";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
@@ -21,12 +22,20 @@ const STATUS_LABEL: Record<string, string> = {
   disqualified: "Descartadas",
 };
 
+const RADAR_SORT_MAP: Record<string, string> = {
+  score: "last_combined_score",
+  fit: "last_fit_score",
+  intent: "last_intent_score",
+  status: "status",
+  matched: "first_matched_at",
+};
+
 export default async function RadarPage({
   params,
   searchParams,
 }: {
   params: { org_slug: string };
-  searchParams: { status?: string };
+  searchParams: { status?: string; sort?: string; order?: string };
 }) {
   const user = await requireAuth();
   const { org } = await requireOrgMembership(params.org_slug, user.id);
@@ -36,6 +45,10 @@ export default async function RadarPage({
     ? (searchParams.status as (typeof STATUS_FILTERS)[number])
     : "all";
 
+  const sortKey = searchParams.sort && RADAR_SORT_MAP[searchParams.sort] ? searchParams.sort : "score";
+  const order: "asc" | "desc" = searchParams.order === "asc" ? "asc" : "desc";
+  const sortColumn = RADAR_SORT_MAP[sortKey];
+
   let query = svc
     .from("org_companies")
     .select(
@@ -43,12 +56,25 @@ export default async function RadarPage({
       { count: "exact" }
     )
     .eq("org_id", org.id)
-    .order("last_combined_score", { ascending: false, nullsFirst: false })
+    .order(sortColumn, { ascending: order === "asc", nullsFirst: false })
     .limit(200);
   if (statusFilter !== "all") {
     query = query.eq("status", statusFilter);
   }
   const { data: rows, count } = await query;
+
+  // Signal counts por empresa visible — para mostrar contribución a intent score
+  const visibleCompanyIds = (rows || []).map((r: any) => r.companies?.id).filter(Boolean);
+  const signalCountByCompany = new Map<string, number>();
+  if (visibleCompanyIds.length > 0) {
+    const { data: sigRows } = await svc
+      .from("signals")
+      .select("company_id")
+      .in("company_id", visibleCompanyIds);
+    for (const s of sigRows || []) {
+      signalCountByCompany.set(s.company_id as string, (signalCountByCompany.get(s.company_id as string) || 0) + 1);
+    }
+  }
 
   // Counts per status for the filter chips
   const { data: allForCounts } = await svc
@@ -87,11 +113,24 @@ export default async function RadarPage({
         <div>
           <h1 className="text-2xl font-semibold">Radar</h1>
           <p className="text-sm text-muted-foreground">
-            {formatNumber(count)} empresa{count !== 1 ? "s" : ""} en {statusFilter === "all" ? "tu radar" : STATUS_LABEL[statusFilter].toLowerCase()}, ordenadas por score combinado
+            {formatNumber(count)} empresa{count !== 1 ? "s" : ""} en {statusFilter === "all" ? "tu radar" : STATUS_LABEL[statusFilter].toLowerCase()}
           </p>
         </div>
         <RescoreButton orgSlug={org.slug} />
       </div>
+
+      <Card className="p-3 bg-muted/30 border-dashed">
+        <div className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <div><span className="text-foreground">Cómo se calcula el score (0-100):</span></div>
+            <div><span className="text-foreground">Fit (0-1)</span> = enriched +0.25 · headcount en rango +0.25 · founded ≥ min +0.20 · revenue conocido +0.15 · sector matchea ICP +0.15</div>
+            <div><span className="text-foreground">Intent (0-1)</span> = growth&gt;10% +0.40 (o &gt;0% +0.20) · Apollo intent_strength high/medium/low +0.30/0.15/0.05 · signals recientes +0.10 c/u (tope +0.30)</div>
+            <div><span className="text-foreground">Score combinado</span> = 0.5 × fit + 0.5 × intent · escalado ×100</div>
+            <div className="pt-1">Tocá <span className="text-foreground font-medium">Rescore</span> para recalcular con los datos actuales (después de Apollo sync o signals nuevas).</div>
+          </div>
+        </div>
+      </Card>
 
       <div className="flex gap-2 flex-wrap">
         {STATUS_FILTERS.map((s) => {
@@ -116,11 +155,23 @@ export default async function RadarPage({
           <TableHeader>
             <TableRow>
               <TableHead>Empresa</TableHead>
-              <TableHead>Score</TableHead>
+              <TableHead>
+                <SortableHeader label="Score" sortKey="score" basePath={`/${org.slug}/radar`} currentSort={sortKey} currentOrder={order} preservedParams={{ status: statusFilter === "all" ? undefined : statusFilter }} />
+              </TableHead>
+              <TableHead>
+                <SortableHeader label="Fit" sortKey="fit" basePath={`/${org.slug}/radar`} currentSort={sortKey} currentOrder={order} preservedParams={{ status: statusFilter === "all" ? undefined : statusFilter }} />
+              </TableHead>
+              <TableHead>
+                <SortableHeader label="Intent" sortKey="intent" basePath={`/${org.slug}/radar`} currentSort={sortKey} currentOrder={order} preservedParams={{ status: statusFilter === "all" ? undefined : statusFilter }} />
+              </TableHead>
               <TableHead>Growth 12m</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>
+                <SortableHeader label="Status" sortKey="status" basePath={`/${org.slug}/radar`} currentSort={sortKey} currentOrder={order} preservedParams={{ status: statusFilter === "all" ? undefined : statusFilter }} />
+              </TableHead>
               <TableHead>Owner</TableHead>
-              <TableHead>Match</TableHead>
+              <TableHead>
+                <SortableHeader label="Match" sortKey="matched" basePath={`/${org.slug}/radar`} currentSort={sortKey} currentOrder={order} preservedParams={{ status: statusFilter === "all" ? undefined : statusFilter }} />
+              </TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -172,6 +223,17 @@ export default async function RadarPage({
                       {(Number(r.last_combined_score || 0) * 100).toFixed(0)}
                     </Badge>
                   </TableCell>
+                  <TableCell className="text-xs text-muted-foreground" title="Qué tan bien matchea la empresa al ICP">
+                    {(Number(r.last_fit_score || 0) * 100).toFixed(0)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground" title="Señales de momento: growth, Apollo intent, signals recientes">
+                    {(Number(r.last_intent_score || 0) * 100).toFixed(0)}
+                    {(signalCountByCompany.get(c.id) || 0) > 0 && (
+                      <span className="ml-1 inline-flex items-center text-[10px] text-blue-600">
+                        · {signalCountByCompany.get(c.id)}🔔
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     {c.organization_headcount_twelve_month_growth != null ? (
                       <Badge variant={c.organization_headcount_twelve_month_growth > 0.1 ? "success" : "info"}>
@@ -206,7 +268,7 @@ export default async function RadarPage({
             })}
             {(!rows || rows.length === 0) && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-12">
                   Sin empresas en el radar todavía. Creá una <Link href={`/${org.slug}/searches/new`} className="text-blue-600 hover:underline">search</Link> para empezar.
                 </TableCell>
               </TableRow>

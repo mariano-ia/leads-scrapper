@@ -58,15 +58,24 @@ export default async function CompaniesPage({
   const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
 
   // Look up which of the visible companies are already on this org's radar
+  // + traemos sus scores para mostrar en columnas
   const visibleIds = (companies || []).map((c: any) => c.id);
   const inRadarSet = new Set<string>();
+  const scoresByCompany = new Map<string, { fit: number; intent: number; combined: number }>();
   if (visibleIds.length > 0) {
     const { data: radarRows } = await svc
       .from("org_companies")
-      .select("company_id")
+      .select("company_id, last_fit_score, last_intent_score, last_combined_score")
       .eq("org_id", org.id)
       .in("company_id", visibleIds);
-    for (const r of radarRows || []) inRadarSet.add(r.company_id);
+    for (const r of radarRows || []) {
+      inRadarSet.add(r.company_id as string);
+      scoresByCompany.set(r.company_id as string, {
+        fit: Number(r.last_fit_score || 0),
+        intent: Number(r.last_intent_score || 0),
+        combined: Number(r.last_combined_score || 0),
+      });
+    }
   }
 
   const basePath = `/${org.slug}/companies`;
@@ -136,6 +145,9 @@ export default async function CompaniesPage({
               <TableHead>
                 <SortableHeader label="Growth 24m" sortKey="growth_24m" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
+              <TableHead title="Score combinado en el radar de esta org (solo si está agregada)">Score</TableHead>
+              <TableHead title="Fit score: qué tan bien matchea al ICP de tu última search">Fit</TableHead>
+              <TableHead title="Intent score: growth + Apollo intent + signals recientes">Intent</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -185,6 +197,13 @@ export default async function CompaniesPage({
                 </TableCell>
                 <TableCell>{growthBadge(c.organization_headcount_twelve_month_growth)}</TableCell>
                 <TableCell>{growthBadge(c.organization_headcount_twenty_four_month_growth)}</TableCell>
+                <TableCell>{scoreBadge(scoresByCompany.get(c.id)?.combined)}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {scoresByCompany.get(c.id) ? (scoresByCompany.get(c.id)!.fit * 100).toFixed(0) : "—"}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {scoresByCompany.get(c.id) ? (scoresByCompany.get(c.id)!.intent * 100).toFixed(0) : "—"}
+                </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center gap-1 justify-end">
                     <AddToRadarButton orgSlug={org.slug} companyId={c.id} inRadar={inRadarSet.has(c.id)} />
@@ -199,7 +218,7 @@ export default async function CompaniesPage({
             ))}
             {(!companies || companies.length === 0) && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                   No se encontraron empresas{q ? ` para "${q}"` : ""}.
                 </TableCell>
               </TableRow>
@@ -232,4 +251,12 @@ function growthBadge(value: number | null) {
   const variant: "success" | "info" | "secondary" | "destructive" =
     value > 0.1 ? "success" : value > 0 ? "info" : value < 0 ? "destructive" : "secondary";
   return <Badge variant={variant}>{formatPercent(value)}</Badge>;
+}
+
+function scoreBadge(value: number | undefined) {
+  if (value == null) return <span className="text-muted-foreground text-xs">no radar</span>;
+  const v = value;
+  const variant: "success" | "info" | "secondary" | "destructive" =
+    v >= 0.6 ? "success" : v >= 0.4 ? "info" : v >= 0.2 ? "secondary" : "destructive";
+  return <Badge variant={variant}>{(v * 100).toFixed(0)}</Badge>;
 }
