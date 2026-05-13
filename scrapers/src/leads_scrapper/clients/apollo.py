@@ -1,18 +1,18 @@
 """Apollo.io API client real.
 
-Ver docs: https://docs.apollo.io/reference
 Endpoints usados:
-- POST /api/v1/mixed_companies/search (search empresas, no consume créditos)
-- POST /api/v1/mixed_people/search (search contactos, consume créditos por reveal)
-- GET  /api/v1/auth/health (verifica auth y devuelve info de cuenta)
+- POST /api/v1/mixed_companies/search    (search empresas, 0 créditos)
+- GET  /api/v1/auth/health                (healthcheck, 0 créditos)
+- POST /api/v1/mixed_people/search        (search contactos, 1 crédito/persona reveal)
+- POST /api/v1/organizations/enrich       (enrich empresa, 1 crédito)
 
-NOTAS DE INTEGRACIÓN (verificar al primer call real con API key):
-1. Endpoint exacto de credit balance puede variar — chequear docs cuando integremos.
-   Apollo no expone créditos restantes vía API standard; hay que parsear de auth/health
-   o de un header `x-api-credits-remaining` que algunos endpoints devuelven.
-2. Apollo a veces cambia el shape de las responses sin avisar — preservamos `raw`
-   en los modelos para no perder data.
-3. Rate limit típico Basic: ~60 req/min. Backoff exponencial cubre.
+ESTRATEGIA DE CRÉDITOS:
+- Initial universe sync: solo search → 0 créditos
+- Enrichment on-demand: cuando una empresa entra a `org_companies` (matchea
+  una search activa), enriquecemos para tener industry/headcount/location/tech.
+  Estimación: 200-500 enrichments/mes para Yacaré.
+- People reveal: 1 crédito por persona revealed (top 3-5 decision makers por
+  empresa en org_companies).
 """
 
 from collections.abc import AsyncIterator
@@ -25,6 +25,7 @@ from leads_scrapper.clients.http import retry_request
 from leads_scrapper.models.apollo import (
     AccountSearchFilters,
     ApolloAccount,
+    ApolloEnrichedOrganization,
     ApolloPerson,
     PeopleSearchFilters,
 )
@@ -75,9 +76,8 @@ class ApolloClient:
         )
 
     async def _budget_or_raise(self, estimated_credits: int) -> None:
-        """Si hay supabase configurado, chequea budget. Aborta con excepción si abort."""
         if self.supabase is None:
-            return  # no enforcement sin supabase
+            return
         decision = await check_apollo_budget(self.supabase, estimated_credits)
         if decision.action == BudgetAction.ABORT:
             logger.error(
@@ -100,21 +100,22 @@ class ApolloClient:
                     "monthly_budget": decision.monthly_budget,
                 },
             )
-            # TODO Week 7: dispatch email a alert_emails
 
     async def _record_credits(self, credits: int) -> None:
         if self.supabase is None or credits == 0:
             return
         await record_credits_consumed(self.supabase, credits)
 
+    async def healthcheck(self) -> dict[str, Any]:
+        """GET /auth/health — confirma que la API key es válida. 0 créditos."""
+        async with self._build_client() as client:
+            response = await retry_request(client, "GET", "/auth/health")
+            return response.json()
+
     async def search_accounts(
         self, filters: AccountSearchFilters
     ) -> AsyncIterator[ApolloAccount]:
-        """Pagina y yield empresas matching los filtros.
-
-        Search de empresas asumimos 0 credit cost (free in API). Aún así
-        chequeamos budget como sanity.
-        """
+        """Pagina y yield empresas matching los filtros. 0 créditos."""
         await self._budget_or_raise(estimated_credits=0)
 
         async with self._build_client() as client:
@@ -142,14 +143,54 @@ class ApolloClient:
                     break
                 page += 1
 
+    async def enrich_organization(
+        self,
+        *,
+        domain: str | None = None,
+        organization_id: str | None = None,
+    ) -> ApolloEnrichedOrganization | None:
+        """POST /organizations/enrich — detalle completo de empresa.
+
+        Consume 1 crédito. Devuelve None si Apollo no encuentra la empresa.
+
+        Args:
+            domain: dominio de la empresa (e.g., "mercadolibre.com").
+            organization_id: Apollo company ID (alternativa a domain).
+        """
+        if domain is None and organization_id is None:
+            raise ValueError("Need either domain or organization_id")
+
+        await self._budget_or_raise(estimated_credits=1)
+
+        params: dict[str, Any] = {}
+        if domain:
+            params["domain"] = domain
+        if organization_id:
+            params["organization_id"] = organization_id
+
+        async with self._build_client() as client:
+            logger.info("apollo enrich_organization request", extra=params)
+            response = await retry_request(
+                client,
+                "POST",
+                "/organizations/enrich",
+                params=params,
+            )
+            data = response.json()
+
+            org_data = data.get("organization") if isinstance(data, dict) else None
+            if not org_data and not data.get("id"):
+                logger.warning("apollo enrich returned no organization", extra=params)
+                return None
+
+            # Apollo cobra 1 crédito incluso si "not found"? — defensive: record only on found
+            await self._record_credits(1)
+            return ApolloEnrichedOrganization.from_apollo_response(data)
+
     async def search_people(
         self, filters: PeopleSearchFilters
     ) -> AsyncIterator[ApolloPerson]:
-        """Search de personas (decision makers).
-
-        Consume créditos: ~1 por persona "revealed" en results. Estimamos
-        por_page créditos por request.
-        """
+        """Search de personas (decision makers). 1 crédito por persona revealed."""
         await self._budget_or_raise(estimated_credits=filters.per_page)
 
         async with self._build_client() as client:
@@ -171,7 +212,7 @@ class ApolloClient:
                 people = payload.get("people") or payload.get("contacts") or []
                 for raw in people:
                     person = ApolloPerson.from_apollo_response(raw)
-                    if person.email:  # solo cuenta créditos cuando vino email revealed
+                    if person.email:
                         total_revealed += 1
                     yield person
 
@@ -181,21 +222,14 @@ class ApolloClient:
                     break
                 page += 1
 
-            # Registra créditos consumidos al final
             if total_revealed > 0:
                 await self._record_credits(total_revealed)
 
     async def get_credit_balance(self) -> dict[str, Any]:
-        """Devuelve info de cuenta + créditos restantes (best-effort).
-
-        Apollo no expone un endpoint estable para esto. Usamos /auth/health
-        que devuelve info de cuenta. Si Apollo expone créditos restantes en
-        algún header o campo, lo parseamos.
-        """
+        """Devuelve info de cuenta + créditos restantes (best-effort)."""
         async with self._build_client() as client:
             response = await retry_request(client, "GET", "/auth/health")
             data = response.json()
-            # Algunos endpoints devuelven 'credits' o similar — preservamos todo
             return {
                 "raw": data,
                 "credits_remaining_header": response.headers.get(

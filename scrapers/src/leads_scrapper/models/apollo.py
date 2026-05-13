@@ -1,11 +1,13 @@
-"""Modelos Apollo: filtros de búsqueda y deserialización de responses.
+"""Modelos Apollo: filtros de búsqueda + deserialización de responses.
 
-Estos modelos espejan la API Apollo. NO son canónicos — los repositorios mapean
-ApolloAccount → CanonicalCompany al persistir.
+CAMPOS REALES de Apollo `mixed_companies/search` (basado en testing 2026-05-13):
+search devuelve UN SUBSET — id/name/domain/founded_year/growth/intent/financial.
+Para industry/headcount/location/tech hay que llamar a `organizations/enrich`
+(1 crédito por empresa).
 
 Refs:
-- Pricing: https://www.apollo.io/pricing
-- API docs: https://docs.apollo.io/reference
+- https://docs.apollo.io/reference/organization-search
+- https://docs.apollo.io/reference/organizations-enrichment
 """
 
 from typing import Any
@@ -16,7 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class AccountSearchFilters(BaseModel):
     """Filtros para POST /api/v1/mixed_companies/search.
 
-    Ver schema completo en spec §7.1 (universe_master_versions.config).
+    Los filtros SÍ se aplican aunque después el field no se eche en el response
+    (Apollo filtra at-source, no echoes).
     """
 
     organization_locations: list[str] = Field(default_factory=lambda: ["Argentina"])
@@ -45,6 +48,13 @@ class AccountSearchFilters(BaseModel):
             )
         if self.q_organization_keyword_tags:
             body["q_organization_keyword_tags"] = self.q_organization_keyword_tags
+        if self.founded_year_min is not None or self.founded_year_max is not None:
+            # Apollo accepts founded_year as a list of ranges
+            year_range = {
+                "min": self.founded_year_min,
+                "max": self.founded_year_max,
+            }
+            body["organization_founded_year_ranges"] = [year_range]
         return body
 
 
@@ -65,7 +75,7 @@ class PeopleSearchFilters(BaseModel):
     person_seniorities: list[str] = Field(
         default_factory=lambda: ["c_suite", "head", "vp", "director"]
     )
-    per_page: int = 5  # top 5 decision makers
+    per_page: int = 5
     page: int = 1
 
     def to_request_body(self) -> dict[str, Any]:
@@ -83,52 +93,166 @@ class PeopleSearchFilters(BaseModel):
 
 
 class ApolloAccount(BaseModel):
-    """Empresa devuelta por Apollo. Solo campos que mapeamos a `companies`.
+    """Empresa devuelta por Apollo search.
 
-    Apollo devuelve mucho más — preservamos todo en `apollo_data` para uso futuro.
+    Campos que SÍ vienen en search (verificado en producción 2026-05-13):
+    - Identidad: id, name, primary_domain, website_url, linkedin_url/uid, social urls
+    - Identidad legal: phone, founded_year, sic_codes
+    - Financial: market_cap, organization_revenue
+    - Growth signals: organization_headcount_six/twelve/twenty_four_month_growth
+    - Intent: intent_strength, show_intent, has_intent_signal_account
+
+    Campos que NO vienen en search (requieren /organizations/enrich, 1 crédito):
+    - industry, sub_industry
+    - estimated_num_employees, headcount_range
+    - country, state, city
+    - technologies, keywords, short_description
     """
 
     model_config = ConfigDict(extra="allow")
 
+    # Identidad core
     id: str  # Apollo company ID
     name: str | None = None
-    website_url: str | None = None
     primary_domain: str | None = None
-    industry: str | None = None
-    sub_industry: str | None = None
-    estimated_num_employees: int | None = None
+    website_url: str | None = None
+
+    # Social / contact
+    linkedin_url: str | None = None
+    linkedin_uid: str | None = None
+    twitter_url: str | None = None
+    facebook_url: str | None = None
+    angellist_url: str | None = None
+    crunchbase_url: str | None = None
+    logo_url: str | None = None
+    phone: str | None = None
+    sanitized_phone: str | None = None
+
+    # Empresa info básica
     founded_year: int | None = None
-    country: str | None = None
-    state: str | None = None
-    city: str | None = None
-    technologies: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
-    short_description: str | None = None
+    sic_codes: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
+
+    # Financial
+    market_cap: str | None = None
+    organization_revenue: float | None = None
+    organization_revenue_printed: str | None = None
+    publicly_traded_symbol: str | None = None
+    publicly_traded_exchange: str | None = None
+
+    # Growth signals (oro para intent_score)
+    organization_headcount_six_month_growth: float | None = None
+    organization_headcount_twelve_month_growth: float | None = None
+    organization_headcount_twenty_four_month_growth: float | None = None
+
+    # Apollo intent
+    intent_strength: str | None = None
+    show_intent: bool | None = None
+    has_intent_signal_account: bool | None = None
+
+    # Ownership
+    owned_by_organization_id: str | None = None
+
+    # Otros
+    alexa_ranking: int | None = None
+
+    # Raw payload preservado (incluye fields no modelados arriba)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_apollo_response(cls, payload: dict[str, Any]) -> "ApolloAccount":
-        """Construye desde un dict de Apollo. Preserva el payload original en `raw`."""
         return cls(
             id=payload["id"],
             name=payload.get("name"),
-            website_url=payload.get("website_url"),
             primary_domain=payload.get("primary_domain"),
-            industry=payload.get("industry"),
-            sub_industry=payload.get("sub_industry"),
-            estimated_num_employees=payload.get("estimated_num_employees"),
+            website_url=payload.get("website_url"),
+            linkedin_url=payload.get("linkedin_url"),
+            linkedin_uid=payload.get("linkedin_uid"),
+            twitter_url=payload.get("twitter_url"),
+            facebook_url=payload.get("facebook_url"),
+            angellist_url=payload.get("angellist_url"),
+            crunchbase_url=payload.get("crunchbase_url"),
+            logo_url=payload.get("logo_url"),
+            phone=payload.get("phone"),
+            sanitized_phone=payload.get("sanitized_phone"),
             founded_year=payload.get("founded_year"),
-            country=payload.get("country"),
-            state=payload.get("state"),
-            city=payload.get("city"),
-            technologies=payload.get("technologies") or [],
-            keywords=payload.get("keywords") or [],
-            short_description=payload.get("short_description"),
+            sic_codes=payload.get("sic_codes") or [],
+            languages=payload.get("languages") or [],
+            market_cap=payload.get("market_cap"),
+            organization_revenue=payload.get("organization_revenue"),
+            organization_revenue_printed=payload.get("organization_revenue_printed"),
+            publicly_traded_symbol=payload.get("publicly_traded_symbol"),
+            publicly_traded_exchange=payload.get("publicly_traded_exchange"),
+            organization_headcount_six_month_growth=payload.get(
+                "organization_headcount_six_month_growth"
+            ),
+            organization_headcount_twelve_month_growth=payload.get(
+                "organization_headcount_twelve_month_growth"
+            ),
+            organization_headcount_twenty_four_month_growth=payload.get(
+                "organization_headcount_twenty_four_month_growth"
+            ),
+            intent_strength=payload.get("intent_strength"),
+            show_intent=payload.get("show_intent"),
+            has_intent_signal_account=payload.get("has_intent_signal_account"),
+            owned_by_organization_id=payload.get("owned_by_organization_id"),
+            alexa_ranking=payload.get("alexa_ranking"),
             raw=payload,
         )
 
+
+class ApolloEnrichedOrganization(BaseModel):
+    """Detalle completo de empresa devuelto por /organizations/enrich.
+
+    Trae los fields que search NO da: industry, headcount, location, tech, etc.
+    Consume 1 crédito por llamada.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    name: str | None = None
+    primary_domain: str | None = None
+    industry: str | None = None
+    sub_industry: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    estimated_num_employees: int | None = None
+    short_description: str | None = None
+    raw_address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    technologies: list[str] = Field(default_factory=list)
+    technology_names: list[str] = Field(default_factory=list)
+    founded_year: int | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_apollo_response(cls, payload: dict[str, Any]) -> "ApolloEnrichedOrganization":
+        org = payload.get("organization") if isinstance(payload, dict) else None
+        data = org or payload
+        return cls(
+            id=data["id"],
+            name=data.get("name"),
+            primary_domain=data.get("primary_domain"),
+            industry=data.get("industry"),
+            sub_industry=data.get("sub_industry"),
+            keywords=data.get("keywords") or [],
+            estimated_num_employees=data.get("estimated_num_employees"),
+            short_description=data.get("short_description"),
+            raw_address=data.get("raw_address"),
+            city=data.get("city"),
+            state=data.get("state"),
+            country=data.get("country"),
+            languages=data.get("languages") or [],
+            technologies=[t.get("name") if isinstance(t, dict) else t for t in (data.get("technologies") or [])],
+            technology_names=data.get("technology_names") or [],
+            founded_year=data.get("founded_year"),
+            raw=data,
+        )
+
     def headcount_range(self) -> str | None:
-        """Mapea estimated_num_employees a rango canónico para `companies.headcount_range`."""
         n = self.estimated_num_employees
         if n is None:
             return None
@@ -161,7 +285,7 @@ class ApolloPerson(BaseModel):
     name: str | None = None
     title: str | None = None
     email: str | None = None
-    email_status: str | None = None  # "verified" | "unverified" | ...
+    email_status: str | None = None
     linkedin_url: str | None = None
     phone: str | None = None
     seniority: str | None = None

@@ -1,9 +1,12 @@
 """Apollo sync job — orquesta el pull del universo de Apollo al DB.
 
 Modos:
-- initial: full pull (sin filtro de last_updated_at). Usado una sola vez al setear.
-- delta:   solo empresas con cambios últimos 7 días.
-- targeted_contacts: refresca contactos de empresas que están en org_companies.
+- initial: full pull con search SOLAMENTE (0 créditos). Carga la base
+  con id/name/domain/founded_year/growth/intent/financial. industry/
+  headcount/location/tech quedan NULL — se enriquecen on-demand cuando
+  la empresa entra al radar.
+- delta: idem pero filtra solo empresas con cambios recientes.
+- targeted_contacts: para empresas en org_companies, refresca top contactos.
 
 Invocación:
     python -m leads_scrapper.jobs.apollo_sync --mode initial [--dry-run]
@@ -19,14 +22,13 @@ from leads_scrapper.clients.apollo import ApolloBudgetExceeded, ApolloClient
 from leads_scrapper.clients.supabase_client import create_supabase_admin_client
 from leads_scrapper.config import get_settings
 from leads_scrapper.models.apollo import AccountSearchFilters
-from leads_scrapper.repositories.companies_repo import upsert_company
+from leads_scrapper.repositories.companies_repo import upsert_company_from_search
 from leads_scrapper.utils.logging import get_logger, setup_logging
 
 logger = get_logger("apollo_sync")
 
 
 def _load_active_universe_master(supabase) -> dict[str, Any] | None:  # noqa: ANN001
-    """Carga la versión activa del universe maestro."""
     resp = (
         supabase.table("universe_master_versions")
         .select("*")
@@ -39,28 +41,27 @@ def _load_active_universe_master(supabase) -> dict[str, Any] | None:  # noqa: AN
     return resp.data[0]
 
 
-def _config_to_filters(config: dict[str, Any]) -> AccountSearchFilters:
-    """Mapea universe_master_versions.config → AccountSearchFilters."""
+def _config_to_filters(config: dict[str, Any], page: int = 1, per_page: int = 100) -> AccountSearchFilters:
     return AccountSearchFilters(
-        organization_locations=[
-            config.get("location_country", "Argentina") or "Argentina"
-        ],
+        organization_locations=[config.get("location_country", "Argentina") or "Argentina"],
         organization_num_employees_ranges=_employees_ranges_from_config(config),
         q_organization_keyword_tags=config.get("keywords_any") or [],
         founded_year_min=config.get("founded_year_min"),
         founded_year_max=config.get("founded_year_max"),
-        per_page=100,
+        per_page=per_page,
+        page=page,
     )
 
 
 def _employees_ranges_from_config(config: dict[str, Any]) -> list[str]:
-    """Convierte headcount_min/max a la lista de ranges que espera Apollo."""
     h_min = config.get("headcount_min")
     h_max = config.get("headcount_max")
     if h_min is None and h_max is None:
         return []
-    # Apollo acepta ranges discretos. Hacemos best-effort.
-    ranges = ["1,10", "11,20", "21,50", "51,100", "101,200", "201,500", "501,1000", "1001,5000", "5001,10000", "10001,1000000"]
+    ranges = [
+        "1,10", "11,20", "21,50", "51,100", "101,200",
+        "201,500", "501,1000", "1001,5000", "5001,10000", "10001,1000000",
+    ]
     selected = []
     for r in ranges:
         lo, hi = (int(x) for x in r.split(","))
@@ -69,7 +70,12 @@ def _employees_ranges_from_config(config: dict[str, Any]) -> list[str]:
     return selected
 
 
-async def run_sync(mode: str, dry_run: bool = False) -> int:
+async def run_sync(
+    mode: str,
+    dry_run: bool = False,
+    *,
+    max_pages: int | None = None,
+) -> int:
     setup_logging()
     settings = get_settings()
     supabase = create_supabase_admin_client()
@@ -93,10 +99,10 @@ async def run_sync(mode: str, dry_run: bool = False) -> int:
             "master_version_id": master["id"],
             "master_version_int": master["version_int"],
             "dry_run": dry_run,
+            "max_pages": max_pages,
         },
     )
 
-    # 1. Insert apollo_sync_runs (status='running')
     run_row = {
         "mode": mode,
         "master_version_id": master["id"],
@@ -111,36 +117,47 @@ async def run_sync(mode: str, dry_run: bool = False) -> int:
         run_id = run_resp.data[0]["id"]
         logger.info("created apollo_sync_runs row", extra={"run_id": run_id})
 
-    # 2. Build filters from config and run search
     config = master["config"]
     filters = _config_to_filters(config)
 
     apollo = ApolloClient(api_key=settings.apollo_api_key, supabase=supabase)
 
     companies_added = 0
-    companies_updated = 0
     errors: list[dict[str, str]] = []
-    accounts_batch = []
-    BATCH_SIZE = 50
+    pages_processed = 0
 
     try:
+        accounts_batch = []
+        current_page = 1
+
         async for account in apollo.search_accounts(filters):
             accounts_batch.append(account)
-            if len(accounts_batch) >= BATCH_SIZE:
+            # Trackeamos páginas — ApolloClient pagina internamente, no expone
+            # cuándo cruza una página. Por eso usamos batch size = per_page.
+            if len(accounts_batch) >= filters.per_page:
                 if dry_run:
                     logger.info(
-                        "dry_run: would upsert batch",
-                        extra={"batch_size": len(accounts_batch)},
+                        "dry_run: would upsert page",
+                        extra={"page": current_page, "batch_size": len(accounts_batch)},
                     )
                 else:
                     for acc in accounts_batch:
                         try:
-                            await upsert_company(supabase, acc)
+                            await upsert_company_from_search(supabase, acc)
                             companies_added += 1
                         except Exception as e:
                             errors.append({"apollo_id": acc.id, "error": str(e)})
                 accounts_batch = []
-        # flush remaining
+                current_page += 1
+                pages_processed = current_page
+                if max_pages is not None and pages_processed >= max_pages:
+                    logger.info(
+                        "reached max_pages, stopping early",
+                        extra={"max_pages": max_pages, "companies_so_far": companies_added},
+                    )
+                    break
+
+        # Flush last partial batch
         if accounts_batch:
             if dry_run:
                 logger.info(
@@ -150,7 +167,7 @@ async def run_sync(mode: str, dry_run: bool = False) -> int:
             else:
                 for acc in accounts_batch:
                     try:
-                        await upsert_company(supabase, acc)
+                        await upsert_company_from_search(supabase, acc)
                         companies_added += 1
                     except Exception as e:
                         errors.append({"apollo_id": acc.id, "error": str(e)})
@@ -158,40 +175,32 @@ async def run_sync(mode: str, dry_run: bool = False) -> int:
     except ApolloBudgetExceeded as e:
         logger.error("apollo budget exceeded, aborting", extra={"reason": str(e)})
         if run_id and not dry_run:
-            supabase.table("apollo_sync_runs").update(
-                {
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "status": "aborted",
-                    "companies_added": companies_added,
-                    "errors": errors,
-                    "aborted_reason": "budget_exceeded",
-                }
-            ).eq("id", run_id).execute()
+            supabase.table("apollo_sync_runs").update({
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "status": "aborted",
+                "companies_added": companies_added,
+                "errors": errors,
+                "aborted_reason": "budget_exceeded",
+            }).eq("id", run_id).execute()
         return 4
     except Exception as e:
         logger.exception("apollo sync failed unexpectedly")
         if run_id and not dry_run:
-            supabase.table("apollo_sync_runs").update(
-                {
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "status": "failed",
-                    "companies_added": companies_added,
-                    "errors": [*errors, {"fatal": str(e)}],
-                }
-            ).eq("id", run_id).execute()
+            supabase.table("apollo_sync_runs").update({
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "status": "failed",
+                "companies_added": companies_added,
+                "errors": [*errors, {"fatal": str(e)}],
+            }).eq("id", run_id).execute()
         return 5
 
-    # 3. Finalize run
     if run_id and not dry_run:
-        supabase.table("apollo_sync_runs").update(
-            {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "status": "completed",
-                "companies_added": companies_added,
-                "companies_updated": companies_updated,
-                "errors": errors,
-            }
-        ).eq("id", run_id).execute()
+        supabase.table("apollo_sync_runs").update({
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "status": "completed",
+            "companies_added": companies_added,
+            "errors": errors,
+        }).eq("id", run_id).execute()
 
     logger.info(
         "apollo sync completed",
@@ -205,7 +214,7 @@ async def run_sync(mode: str, dry_run: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Apollo sync job")
+    parser = argparse.ArgumentParser(description="Apollo sync job (search only)")
     parser.add_argument(
         "--mode",
         choices=["initial", "delta", "targeted_contacts"],
@@ -216,9 +225,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="No escribe en DB, solo loguea lo que haría",
     )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=None,
+        help="Cortar a N páginas (útil para smoke tests)",
+    )
     args = parser.parse_args(argv)
-
-    return asyncio.run(run_sync(args.mode, dry_run=args.dry_run))
+    return asyncio.run(run_sync(args.mode, dry_run=args.dry_run, max_pages=args.max_pages))
 
 
 if __name__ == "__main__":

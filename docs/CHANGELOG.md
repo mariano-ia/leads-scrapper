@@ -2,6 +2,70 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 2 (cont. 2): Apollo activado + seeds aplicados + ajuste search/enrich
+
+### Setup keys reales (por el usuario)
+- `SUPABASE_SERVICE_ROLE_KEY` ✓ pegado
+- `ANTHROPIC_API_KEY` ✓ pegado
+- `RESEND_API_KEY` ✓ pegado + dominio `yacare.io` verificado en Resend
+- `APOLLO_API_KEY` ✓ pegado (key creada como master key)
+- Mariano user creado en Supabase Auth (ID `a44e4b1a-6200-460e-9c30-fd37ff578767`)
+
+### Seeds aplicados vía Supabase MCP
+- `super_admins`: Mariano marcado @ 16:19:43 UTC
+- `universe_master_versions` v1: activa @ 16:19:50 UTC, ID `8497a600-9c0d-40b6-b06b-2938e03e58c6`
+- `apollo_budget_config` ajustado: 2500 créditos/mes ($49 plan Basic annual = 30K/año ÷ 12)
+
+### Verificación Apollo en vivo
+- `GET /auth/health` → `{healthy: true, is_logged_in: true}` ✅
+- `POST /mixed_companies/search` con filtros del maestro → **35.348 empresas argentinas** en target (loc AR + headcount 11-500 + founded 2005+)
+- Master key permissions confirmados (search devuelve 200 OK)
+
+### Finding crítico — pivot de estrategia (ver ADR 0005)
+Apollo search NO devuelve industry / headcount / location / technologies / keywords / description. Solo: id, name, domain, founded_year, growth metrics, intent, financial.
+
+**Strategy adjustment aceptado**: search-first (0 créditos para todo el universo) + enrichment on-demand (1 crédito por empresa que entra al radar de una org). Estimación gasto: ~200-500 créditos/mes vs 2500 disponibles.
+
+### Cambios de código (Week 2.5)
+- `models/apollo.py`: `ApolloAccount` reescrito con campos reales del search response (growth, intent, financial, social, sic_codes). Nuevo modelo `ApolloEnrichedOrganization` con industry/headcount/location/tech.
+- `clients/apollo.py`: nuevo método `enrich_organization(domain | organization_id)` que llama `/organizations/enrich` consumiendo 1 crédito. Método `healthcheck()` para probes 0-créditos.
+- `repositories/companies_repo.py`: separadas `upsert_company_from_search` (0 créditos, fields básicos) y `update_company_with_enrichment` (post-enrich).
+- `jobs/apollo_sync.py`: modo `initial` ahora hace SOLO search. Nuevo flag `--max-pages N` para smoke tests acotados.
+- `services/budget_guardrail.py`: sin cambios funcionales.
+
+### Credit counter (nuevo)
+- Migration 0009: vista SQL `apollo_credit_summary` que consolida budget + uso + threshold + healthcheck.
+- CLI `scrapers/scripts/credit_status.py`: imprime barra de progreso ASCII con el estado actual.
+- Ejemplo de output:
+  ```
+  ┌─ Apollo · basic ($49.00/mes)
+  │  2026-05
+  │
+  │  Créditos: 0/2500  ·  Restantes: 2500
+  │  [░░░░░░░░░░░░░░░░░░░░] 0.0%
+  │
+  │  Thresholds: [70, 85, 95]  ·  Hard stop: 100%
+  │  Último sync: nunca
+  │
+  │  Apollo health: True  ·  logged_in: True
+  └─
+  ```
+
+### Documentación nueva
+- ADR 0005 `apollo-search-vs-enrichment-strategy.md`: registra el pivot search-first
+
+### TODOs identificados
+- **Industry filter mapping**: el config maestro tiene nombres de industria ("information technology and services"), Apollo espera tag IDs numéricos. Hay que agregar un paso de mapeo. Sin esto, search no filtra por sector y devuelve 35K empresas. Con el filtro estimamos 5-15K. Fix en Week 3.
+- **Apollo intent ralo en LATAM**: los primeros resultados muestran que Apollo tiene poca data de intent para empresas argentinas. Validación: nuestras signals propias (BO, postings, web changes) van a ser la fuente principal de intent para LATAM.
+
+### Pendiente cuando el usuario corra setup local
+1. `cd scrapers && python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`
+2. `pytest` ← validar 14+ tests
+3. `python scripts/credit_status.py` ← validar contador
+4. `python -m leads_scrapper.jobs.apollo_sync --mode initial --dry-run --max-pages 1` ← smoke
+5. Si OK: `python -m leads_scrapper.jobs.apollo_sync --mode initial --max-pages 5` ← primer sync chico (500 empresas)
+6. Si bien: corrida full sin `--max-pages`
+
 ## 2026-05-13 · Sesión 2 (cont.): Plan Week 2 + implementación Apollo + disciplina docs
 
 ### Documentación
