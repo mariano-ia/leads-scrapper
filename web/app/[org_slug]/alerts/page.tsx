@@ -1,3 +1,4 @@
+import { Info } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -22,6 +23,17 @@ export default async function AlertsPage({ params }: { params: { org_slug: strin
         <h1 className="text-2xl font-semibold">Alerts</h1>
         <p className="text-sm text-muted-foreground">Notificaciones por email enviadas para esta org</p>
       </div>
+
+      <Card className="p-3 bg-muted/30 border-dashed">
+        <div className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <div><span className="text-foreground">¿Cómo funcionan?</span> Cada search puede activar alertas. Cuando una empresa nueva matchea, mandamos un mail (vía Resend, desde <code className="text-foreground">alerts@yacare.io</code>) al destinatario configurado en la search.</div>
+            <div><span className="text-foreground">¿Frecuencia?</span> Digest diario con todos los matches nuevos de las últimas 24h, no uno por empresa. Si no hay nada nuevo, no se envía.</div>
+            <div><span className="text-foreground">¿Por qué fallan?</span> Estados posibles: <code className="text-foreground">sent</code> (entregado), <code className="text-foreground">bounced</code> (mailbox inválido), <code className="text-foreground">failed</code> (error en Resend / API key vencida).</div>
+          </div>
+        </div>
+      </Card>
 
       <Card>
         <CardHeader>

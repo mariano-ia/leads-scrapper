@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Search as SearchIcon, Bell, BellOff } from "lucide-react";
+import { Plus, Search as SearchIcon, Bell, BellOff, Info } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +23,7 @@ export default async function SearchesPage({ params }: { params: { org_slug: str
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-2xl font-semibold">Searches</h1>
-          <p className="text-sm text-muted-foreground">Búsquedas parametrizables sobre el universo</p>
+          <p className="text-sm text-muted-foreground">Filtros guardados sobre el universo de empresas</p>
         </div>
         <Link href={`/${org.slug}/searches/new`}>
           <Button>
@@ -31,6 +31,17 @@ export default async function SearchesPage({ params }: { params: { org_slug: str
           </Button>
         </Link>
       </div>
+
+      <Card className="p-3 bg-muted/30 border-dashed">
+        <div className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <div><span className="text-foreground">¿Qué es una search?</span> Un filtro guardado sobre la base local de empresas (que viene de Apollo) — define <em>fit</em> (headcount, antigüedad, sector) + <em>intent</em> (señales como growth o intent topics de Apollo). Las empresas que matchean caen al <code className="text-foreground">/radar</code> de la org.</div>
+            <div><span className="text-foreground">¿Cuándo correr?</span> Cada vez que sincronizamos Apollo o que llegan signals nuevas, las searches activas se re-evalúan automáticamente. Podés pausarlas sin borrarlas.</div>
+            <div><span className="text-foreground">¿Y las alertas?</span> Si activás <Bell className="inline h-3 w-3" /> en una search, te llega un mail con los matches nuevos del día (Resend, configurable por search).</div>
+          </div>
+        </div>
+      </Card>
 
       {searches && searches.length > 0 ? (
         <div className="grid gap-3">

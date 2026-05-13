@@ -2,6 +2,62 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 4: Contactos, scoring real, dashboard expandido
+
+### Contactos (Apollo people search)
+- Nuevo server action `fetchContactsAction(orgSlug, companyId, { max })` en `web/app/[org_slug]/companies/[id]/actions.ts` que llama `mixed_people/search` filtrado por `organization_ids: [apollo_id]` + titles + seniorities (CEO/Founder/CTO/Director...).
+- Hace upsert en `company_contacts` por (company_id, apollo_person_id). Cuenta solo créditos por contactos con email revealed (Apollo a veces devuelve `email_not_unlocked@domain.com`).
+- Budget guardrail integrado: no permite reventar el hard-stop.
+- Nuevo botón "Buscar contactos" en el header del detalle de empresa con tooltip explicativo.
+- Tab Contacts rediseñada: sortea decision makers primero, muestra badge "verified" en emails Apollo-verified, links a LinkedIn, mailto, copy de teléfono.
+
+### Scoring real (`web/lib/scoring.ts`)
+Reemplazo del scoring fijo (0.5/0/0.5) por una fórmula que combina:
+- **fit (0..1)**: enriched +0.25, headcount dentro del rango +0.25, founded >= min +0.20, revenue conocido +0.15, sector matchea industries +0.15.
+- **intent (0..1)**: growth >10% +0.40 (o >0% +0.20), intent_strength high/medium/low +0.30/+0.15/+0.05, signals recientes +0.10 c/u hasta +0.30.
+- **combined = 0.5 × fit + 0.5 × intent**.
+- Aplicado en `addToRadarAction`, `createSearchAction` (backfill ahora filtra rows con combined >= 0.3 en vez de inflar el radar con todo).
+- Nuevo `rescoreRadarAction(orgSlug)` admin-only: recalcula todo el radar en bulk usando data actual (sector, growth, intent, signals).
+- Botón "Rescore" en la página `/radar` para admins.
+
+### Dashboard mejorado (`/dashboard`)
+- 2 filas de stat cards: universo, enriquecidas (con %), AI brief, intent activo · radar, contactos (con/sin email), signals, searches activas.
+- **Top empresas de tu radar (por score)**: card nuevo, muestra los 10 mejor puntuados con badge combined-score · breakdown fit/intent en tooltip.
+- **Top empresas del universo (por growth)**: ranking del universo entero (no solo radar).
+- **Distribución de score · radar**: panel hot/warm/cold/dead con bars y % (en vez del panel "searches activas" duplicado).
+- "Último Apollo sync" ahora incluye el comando para correr delta (refresh).
+
+### Jobs operativos documentados en `/admin/usage`
+Card "Jobs operativos" con los 6 comandos para correr:
+- `apollo_sync --mode initial` (poblar universe)
+- `apollo_sync --mode delta` (refresh semanal de intent + growth)
+- `enrich_pending --limit N` (enriquecer batch)
+- `generate_briefs --limit N` (Claude briefs)
+- `scrape_bo --days N` (signals propios)
+- `send_alerts` (digest diario)
+
+### Threshold del badge de score arreglado
+Antes el radar mostraba score × 100 (porque hardcodeaban growth × 100 como intent) y el badge usaba thresholds 20 / 5 absolutos. Ahora score está en 0..1 y se muestra como entero ×100. Thresholds: ≥60 success, ≥40 info, ≥20 secondary, <20 destructive.
+
+## 2026-05-13 · Sesión 3: UX fixes (paginador, revenue, indicadores, radar manual, copy)
+
+### Bugs corregidos
+- **Paginador "undefined"**: `new URLSearchParams({ q: undefined })` escribía la string `"undefined"` y rompía la URL. Nuevo helper `buildSearchParams()` en `web/lib/utils.ts` que filtra null/undefined/empty.
+- **Revenue no se mostraba**: solo 5% (1.135 / 23.707) tenían `organization_revenue_printed`. Nuevo helper `formatRevenue()` con fallback al numérico (`$XM`/`$XB`/`$XK`). Usado en `/companies` y `/companies/:id`.
+
+### UX mejorada
+- **Indicador "enriched"**: `<Database>` icon violeta junto al nombre cuando `sector` está poblado (≠ del `<Sparkles>` azul de AI brief). En lista y detalle.
+- **Botón "+ Radar"** desde lista y detalle (`AddToRadarButton`). Verifica si la empresa ya está en `org_companies` y muestra "En radar" check verde. Server actions en `radar-actions.ts` (add + remove).
+- **Texto explicativo** en `/companies`, `/searches`, `/alerts` — card con `Info` icon explicando enriched / radar / cómo funcionan searches y alerts.
+- **Botón "Enrich Apollo (1 cred)"** con tooltip detallando exactamente qué trae (sector, sub-sector, headcount, ciudad/provincia/país, tech stack, intent topics, descripción).
+- **Notes empty state** del detalle ahora dice "tocá + Radar arriba para trackearla" en vez de "primero tiene que matchear una search activa".
+
+### Doc nueva
+- `docs/INFO_POR_EMPRESA.md`: tabla completa de las 6 capas de info por empresa (Base / Enriched / AI brief / Signals / Contacts / Pipeline) con estado actual de cobertura, costos por crédito, y qué falta para llegar a "empresa completa".
+
+### Aclaración del modelo de ownership
+La asignación de owner (`org_companies.owner_user_id`) marca **responsabilidad**, no **visibilidad**. Todos los miembros de la org ven todas las empresas del radar. El owner es quien tiene la tarjeta en pipeline.
+
 ## 2026-05-13 · Sesión 2 (cont. 2): Apollo activado + seeds aplicados + ajuste search/enrich
 
 ### Setup keys reales (por el usuario)

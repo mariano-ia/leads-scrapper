@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { Search, ArrowRight, Linkedin, ExternalLink, Sparkles } from "lucide-react";
+import { Search, ArrowRight, Linkedin, ExternalLink, Sparkles, Database, Info } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SortableHeader } from "@/components/sortable-header";
+import { AddToRadarButton } from "@/components/add-to-radar-button";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
-import { formatNumber, formatPercent } from "@/lib/utils";
+import { formatNumber, formatPercent, formatRevenue, buildSearchParams } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
 
@@ -56,6 +57,18 @@ export default async function CompaniesPage({
   const { data: companies, count } = await query;
   const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
 
+  // Look up which of the visible companies are already on this org's radar
+  const visibleIds = (companies || []).map((c: any) => c.id);
+  const inRadarSet = new Set<string>();
+  if (visibleIds.length > 0) {
+    const { data: radarRows } = await svc
+      .from("org_companies")
+      .select("company_id")
+      .eq("org_id", org.id)
+      .in("company_id", visibleIds);
+    for (const r of radarRows || []) inRadarSet.add(r.company_id);
+  }
+
   const basePath = `/${org.slug}/companies`;
   const preservedParams = { q: q || undefined, page: searchParams.page };
   const pageParams = { q: q || undefined, sort: sortKey, order };
@@ -66,10 +79,27 @@ export default async function CompaniesPage({
         <div>
           <h1 className="text-2xl font-semibold">Companies</h1>
           <p className="text-sm text-muted-foreground">
-            {formatNumber(count)} empresas en el universo
+            {formatNumber(count)} empresas en el universo · base completa que se filtra con tus searches
           </p>
         </div>
       </div>
+
+      <Card className="p-3 bg-muted/30 border-dashed">
+        <div className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <div>
+              <Database className="inline h-3 w-3 mr-1 text-violet-600" />
+              <span className="text-foreground">Enriched</span>: empresa con datos extra de Apollo (sector, headcount, ciudad, tech_stack).
+              <Sparkles className="inline h-3 w-3 mx-1 text-blue-600" />
+              <span className="text-foreground">AI brief</span>: tiene resumen generado por Claude.
+            </div>
+            <div>
+              <span className="text-foreground">+ Radar</span>: marca a la empresa como tracked para la org · todos los miembros la ven en <code className="text-foreground">/radar</code>. Asignar a un usuario es marca de <em>responsabilidad</em>, no de visibilidad.
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <form className="flex gap-2 items-center">
         <div className="relative flex-1 max-w-sm">
@@ -122,7 +152,16 @@ export default async function CompaniesPage({
                         <Linkedin className="h-3.5 w-3.5" />
                       </a>
                     )}
-                    {c.ai_brief && <Sparkles className="h-3.5 w-3.5 text-blue-600" />}
+                    {c.sector && (
+                      <span title="Enriched: tiene datos extra de Apollo (sector, headcount, ciudad)">
+                        <Database className="h-3.5 w-3.5 text-violet-600" />
+                      </span>
+                    )}
+                    {c.ai_brief && (
+                      <span title="Tiene AI brief generado por Claude">
+                        <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                      </span>
+                    )}
                   </div>
                   {(c.sector || c.headcount_range || c.location_ciudad) && (
                     <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
@@ -141,15 +180,20 @@ export default async function CompaniesPage({
                   ) : "—"}
                 </TableCell>
                 <TableCell>{c.founded_year || "—"}</TableCell>
-                <TableCell className="text-muted-foreground">{c.organization_revenue_printed || "—"}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {formatRevenue(c.organization_revenue, c.organization_revenue_printed)}
+                </TableCell>
                 <TableCell>{growthBadge(c.organization_headcount_twelve_month_growth)}</TableCell>
                 <TableCell>{growthBadge(c.organization_headcount_twenty_four_month_growth)}</TableCell>
                 <TableCell className="text-right">
-                  <Link href={`${basePath}/${c.id}`}>
-                    <Button size="sm" variant="outline">
-                      Ver detalle <ArrowRight className="h-3 w-3" />
-                    </Button>
-                  </Link>
+                  <div className="flex items-center gap-1 justify-end">
+                    <AddToRadarButton orgSlug={org.slug} companyId={c.id} inRadar={inRadarSet.has(c.id)} />
+                    <Link href={`${basePath}/${c.id}`}>
+                      <Button size="sm" variant="outline">
+                        Ver detalle <ArrowRight className="h-3 w-3" />
+                      </Button>
+                    </Link>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -170,10 +214,10 @@ export default async function CompaniesPage({
             Página {page} de {totalPages}
           </div>
           <div className="flex gap-2">
-            <Link href={`${basePath}?${new URLSearchParams({ ...pageParams, page: String(page - 1) } as any)}`}>
+            <Link href={`${basePath}?${buildSearchParams({ ...pageParams, page: page - 1 })}`}>
               <Button variant="outline" size="sm" disabled={page <= 1}>Anterior</Button>
             </Link>
-            <Link href={`${basePath}?${new URLSearchParams({ ...pageParams, page: String(page + 1) } as any)}`}>
+            <Link href={`${basePath}?${buildSearchParams({ ...pageParams, page: page + 1 })}`}>
               <Button variant="outline" size="sm" disabled={page >= totalPages}>Siguiente</Button>
             </Link>
           </div>

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ExternalLink, Linkedin, Phone, Globe, Building2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Linkedin, Phone, Globe, Building2, Mail, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,11 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
-import { formatPercent, formatDate, timeAgo } from "@/lib/utils";
+import { formatPercent, formatDate, timeAgo, formatRevenue } from "@/lib/utils";
 import { CompanyActions } from "./action-buttons";
 import { NotesPanel } from "@/components/notes-panel";
 import { StatusSelect } from "@/components/status-select";
+import { AddToRadarButton } from "@/components/add-to-radar-button";
 
 export default async function CompanyDetailPage({
   params,
@@ -60,12 +61,15 @@ export default async function CompanyDetailPage({
             Volver
           </Button>
         </Link>
-        <CompanyActions
-          orgSlug={org.slug}
-          companyId={company.id}
-          needsEnrich={!isEnriched}
-          needsBrief={!company.ai_brief}
-        />
+        <div className="flex items-center gap-2">
+          <AddToRadarButton orgSlug={org.slug} companyId={company.id} inRadar={Boolean(orgCompanyRes.data)} />
+          <CompanyActions
+            orgSlug={org.slug}
+            companyId={company.id}
+            needsEnrich={!isEnriched}
+            needsBrief={!company.ai_brief}
+          />
+        </div>
       </div>
 
       <div className="flex justify-between items-start gap-6">
@@ -154,7 +158,7 @@ export default async function CompanyDetailPage({
                 <CardTitle className="text-base">Financial</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <Row label="Revenue" value={company.organization_revenue_printed} />
+                <Row label="Revenue" value={formatRevenue(company.organization_revenue, company.organization_revenue_printed)} />
                 <Row label="Market cap" value={company.market_cap} />
                 <Row label="Public" value={company.publicly_traded_symbol ? `${company.publicly_traded_exchange}:${company.publicly_traded_symbol}` : "Privada"} />
               </CardContent>
@@ -166,8 +170,10 @@ export default async function CompanyDetailPage({
               <CardHeader>
                 <CardTitle className="text-base">Datos pendientes de enriquecer</CardTitle>
                 <CardDescription>
-                  Esta empresa todavía no fue enriquecida con Apollo. Industry, headcount, ubicación, tech stack y descripción
-                  aparecen al hacer "Enrich" (consume 1 crédito).
+                  Esta empresa solo tiene los datos básicos de Apollo Search (razón social, dominio, LinkedIn, year fundada, revenue,
+                  growth de headcount). Al hacer <span className="font-medium">Enrich</span> traemos del endpoint <code>/organizations/enrich</code> de Apollo:
+                  sector + sub-sector, headcount range, ubicación (ciudad/provincia/país), tech stack detectado, intent topics activos
+                  y descripción de la empresa. <span className="font-medium">Costo: 1 crédito Apollo por empresa.</span>
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -219,21 +225,53 @@ export default async function CompanyDetailPage({
             <CardContent className="p-0">
               {contactsRes.data && contactsRes.data.length > 0 ? (
                 <div className="divide-y">
-                  {contactsRes.data.map((c) => (
-                    <div key={c.id} className="p-4 flex justify-between items-start">
-                      <div>
-                        <div className="font-medium text-sm">{c.full_name}</div>
-                        <div className="text-xs text-muted-foreground">{c.title}</div>
-                        {c.email && <div className="text-xs">{c.email}</div>}
+                  {[...contactsRes.data]
+                    .sort((a: any, b: any) => Number(b.is_decision_maker) - Number(a.is_decision_maker))
+                    .map((c: any) => (
+                      <div key={c.id} className="p-4 flex justify-between items-start gap-4">
+                        <div className="space-y-1 flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="font-medium text-sm">{c.full_name}</div>
+                            {c.is_decision_maker && <Badge variant="success">decision maker</Badge>}
+                            {c.linkedin_url && (
+                              <a href={c.linkedin_url} target="_blank" rel="noopener" className="text-muted-foreground hover:text-foreground">
+                                <Linkedin className="h-3.5 w-3.5" />
+                              </a>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{c.title || "—"}</div>
+                          {c.email ? (
+                            <div className="flex items-center gap-2 text-xs">
+                              <Mail className="h-3 w-3" />
+                              <a href={`mailto:${c.email}`} className="hover:underline font-mono">{c.email}</a>
+                              {c.email_status === "verified" && (
+                                <Badge variant="success" className="gap-1 text-[10px]">
+                                  <ShieldCheck className="h-2.5 w-2.5" /> verified
+                                </Badge>
+                              )}
+                              {c.email_status && c.email_status !== "verified" && (
+                                <Badge variant="secondary" className="gap-1 text-[10px]">
+                                  <ShieldQuestion className="h-2.5 w-2.5" /> {c.email_status}
+                                </Badge>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground italic">email no revealed</div>
+                          )}
+                          {c.phone && (
+                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                              <Phone className="h-3 w-3" /> {c.phone}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      {c.is_decision_maker && <Badge variant="success">decision maker</Badge>}
-                    </div>
-                  ))}
+                    ))}
                 </div>
               ) : (
-                <p className="p-8 text-center text-sm text-muted-foreground">
-                  Sin contactos. Apollo people search se ejecuta al enriquecer (próximo paso).
-                </p>
+                <div className="p-8 text-center text-sm text-muted-foreground space-y-2">
+                  <p>Sin contactos todavía.</p>
+                  <p className="text-xs">Tocá <span className="font-medium">"Buscar contactos"</span> arriba para traer hasta 5 decision makers de Apollo (CEO/CTO/Founder/Director). Cuesta 1 crédito por persona con email revealed.</p>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -245,8 +283,8 @@ export default async function CompanyDetailPage({
           ) : (
             <Card>
               <CardContent className="p-8 text-center text-sm text-muted-foreground">
-                Esta empresa no está en el radar de tu org todavía. Para agregar notas, primero tiene
-                que matchear una search activa.
+                Esta empresa no está en el radar de tu org todavía. Tocá <span className="font-medium">+ Radar</span> arriba para
+                empezar a trackearla — ahí podés agregarle notas, asignar responsable y cambiar status.
               </CardContent>
             </Card>
           )}

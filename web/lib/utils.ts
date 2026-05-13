@@ -40,3 +40,29 @@ export function initials(name: string | null | undefined): string {
   if (!name) return "?";
   return name.split(" ").slice(0, 2).map((w) => w[0]?.toUpperCase() || "").join("");
 }
+
+/**
+ * Formatea revenue numérico en formato compacto: $1.5M, $250K, $25M.
+ * Cae a `printed` si está disponible (Apollo ya lo formatea para empresas grandes).
+ */
+export function formatRevenue(numeric: number | null | undefined, printed?: string | null): string {
+  if (printed) return printed.startsWith("$") ? printed : `$${printed}`;
+  if (numeric == null || numeric === 0) return "—";
+  if (numeric >= 1_000_000_000) return `$${(numeric / 1_000_000_000).toFixed(1)}B`;
+  if (numeric >= 1_000_000) return `$${(numeric / 1_000_000).toFixed(1)}M`;
+  if (numeric >= 1_000) return `$${(numeric / 1_000).toFixed(0)}K`;
+  return `$${numeric.toFixed(0)}`;
+}
+
+/**
+ * Helper para construir URLSearchParams sin valores vacíos/undefined.
+ */
+export function buildSearchParams(params: Record<string, string | number | undefined | null>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "" && String(v) !== "undefined") {
+      sp.set(k, String(v));
+    }
+  }
+  return sp.toString();
+}

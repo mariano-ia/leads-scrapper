@@ -117,6 +117,147 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
 }
 
 /**
+ * Buscar contactos (decision makers) en Apollo people search.
+ * Consume hasta `max` créditos (1 por persona con email revealed).
+ */
+export async function fetchContactsAction(
+  orgSlug: string,
+  companyId: string,
+  opts?: { max?: number }
+) {
+  const user = await requireAuth();
+  await requireOrgMembership(orgSlug, user.id);
+
+  const svc = createSupabaseServiceClient();
+  const apolloKey = process.env.APOLLO_API_KEY;
+  if (!apolloKey) return { error: "APOLLO_API_KEY no configurada" };
+
+  const max = Math.min(opts?.max ?? 5, 10);
+
+  const { data: company } = await svc
+    .from("companies")
+    .select("id, apollo_id, dominio")
+    .eq("id", companyId)
+    .single();
+  if (!company) return { error: "Empresa no encontrada" };
+  if (!company.apollo_id) return { error: "Empresa sin apollo_id — no se puede buscar contactos" };
+
+  // Budget check
+  const ym = new Date().toISOString().slice(0, 7);
+  const [{ data: cfg }, { data: usage }] = await Promise.all([
+    svc.from("apollo_budget_config").select("*").limit(1).single(),
+    svc.from("apollo_credit_usage_monthly").select("*").eq("year_month", ym).maybeSingle(),
+  ]);
+  if (cfg) {
+    const used = (usage?.credits_used as number) || 0;
+    const cap = (Number(cfg.monthly_budget_credits) * Number(cfg.hard_stop_pct)) / 100;
+    if (used + max > cap) {
+      return { error: `Budget Apollo casi agotado (${used}/${cap}). Esperá al próximo ciclo.` };
+    }
+  }
+
+  // Apollo people search por organization_id
+  try {
+    const body = {
+      organization_ids: [company.apollo_id],
+      person_titles: [
+        "CEO",
+        "Founder",
+        "Co-Founder",
+        "CTO",
+        "Chief Technology Officer",
+        "COO",
+        "Head of Digital",
+        "Director",
+        "Director General",
+      ],
+      person_seniorities: ["c_suite", "founder", "owner", "partner", "head", "vp", "director"],
+      page: 1,
+      per_page: max,
+    };
+    const apolloRes = await fetch("https://api.apollo.io/api/v1/mixed_people/search", {
+      method: "POST",
+      headers: {
+        "X-Api-Key": apolloKey,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!apolloRes.ok) {
+      const txt = await apolloRes.text();
+      return { error: `Apollo ${apolloRes.status}: ${txt.slice(0, 200)}` };
+    }
+    const data = await apolloRes.json();
+    const people: any[] = data.people || data.contacts || [];
+    if (people.length === 0) {
+      return { error: "Apollo no encontró decision makers para esta empresa" };
+    }
+
+    let revealedCount = 0;
+    const rows = people.map((p) => {
+      const fullName = p.name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "(sin nombre)";
+      const isDM =
+        ["c_suite", "founder", "owner", "partner"].includes(p.seniority) ||
+        ["ceo", "founder", "cto", "coo", "cfo", "chief", "head of"].some((kw) =>
+          (p.title || "").toLowerCase().includes(kw)
+        );
+      if (p.email && p.email !== "email_not_unlocked@domain.com") revealedCount++;
+      return {
+        company_id: companyId,
+        apollo_person_id: p.id as string,
+        full_name: fullName,
+        title: p.title || null,
+        email: p.email && p.email !== "email_not_unlocked@domain.com" ? p.email : null,
+        email_status: p.email_status || null,
+        linkedin_url: p.linkedin_url || null,
+        phone: p.sanitized_phone || p.phone || null,
+        is_decision_maker: isDM,
+        source: "apollo",
+        last_synced_at: new Date().toISOString(),
+      };
+    });
+
+    // Upsert por apollo_person_id (algunos pueden no tener email, así que no usamos el UNIQUE company_id,email)
+    for (const row of rows) {
+      const { data: existing } = await svc
+        .from("company_contacts")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("apollo_person_id", row.apollo_person_id)
+        .maybeSingle();
+      if (existing) {
+        await svc.from("company_contacts").update(row).eq("id", existing.id);
+      } else {
+        await svc.from("company_contacts").insert(row);
+      }
+    }
+
+    // Record credits
+    if (revealedCount > 0) {
+      if (usage) {
+        await svc
+          .from("apollo_credit_usage_monthly")
+          .update({
+            credits_used: (usage.credits_used as number) + revealedCount,
+            last_sync_at: new Date().toISOString(),
+          })
+          .eq("id", usage.id);
+      } else {
+        await svc
+          .from("apollo_credit_usage_monthly")
+          .insert({ year_month: ym, credits_used: revealedCount, last_sync_at: new Date().toISOString() });
+      }
+    }
+
+    revalidatePath(`/${orgSlug}/companies/${companyId}`);
+    return { success: true, count: people.length, revealed: revealedCount };
+  } catch (e: any) {
+    return { error: e?.message || "Error desconocido" };
+  }
+}
+
+/**
  * Generar brief con Anthropic.
  */
 export async function generateBriefAction(orgSlug: string, companyId: string) {

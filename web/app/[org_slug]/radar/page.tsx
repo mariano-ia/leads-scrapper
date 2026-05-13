@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp } from "lucide-react";
+import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp, Database } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusSelect } from "@/components/status-select";
 import { OwnerSelect } from "@/components/owner-select";
+import { RescoreButton } from "./rescore-button";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
-import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { formatNumber, formatPercent, formatRevenue, timeAgo } from "@/lib/utils";
 
 const STATUS_FILTERS = ["all", "new", "reviewed", "qualified", "in_pipeline", "disqualified"] as const;
 const STATUS_LABEL: Record<string, string> = {
@@ -38,7 +39,7 @@ export default async function RadarPage({
   let query = svc
     .from("org_companies")
     .select(
-      "id, first_matched_at, status, last_combined_score, last_fit_score, last_intent_score, ai_brief, companies(id, razon_social, dominio, sector, headcount_range, location_ciudad, organization_revenue_printed, organization_headcount_twelve_month_growth, intent_strength, ai_brief, linkedin_url)",
+      "id, first_matched_at, status, last_combined_score, last_fit_score, last_intent_score, ai_brief, companies(id, razon_social, dominio, sector, headcount_range, location_ciudad, organization_revenue, organization_revenue_printed, organization_headcount_twelve_month_growth, intent_strength, ai_brief, linkedin_url)",
       { count: "exact" }
     )
     .eq("org_id", org.id)
@@ -82,11 +83,14 @@ export default async function RadarPage({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold">Radar</h1>
-        <p className="text-sm text-muted-foreground">
-          {formatNumber(count)} empresa{count !== 1 ? "s" : ""} en {statusFilter === "all" ? "tu radar" : STATUS_LABEL[statusFilter].toLowerCase()}, ordenadas por score combinado
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-semibold">Radar</h1>
+          <p className="text-sm text-muted-foreground">
+            {formatNumber(count)} empresa{count !== 1 ? "s" : ""} en {statusFilter === "all" ? "tu radar" : STATUS_LABEL[statusFilter].toLowerCase()}, ordenadas por score combinado
+          </p>
+        </div>
+        <RescoreButton orgSlug={org.slug} />
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -141,19 +145,31 @@ export default async function RadarPage({
                           <ExternalLink className="h-3.5 w-3.5" />
                         </a>
                       )}
-                      {c.ai_brief && <Sparkles className="h-3.5 w-3.5 text-blue-600" />}
+                      {c.sector && (
+                        <span title="Enriched · datos extra de Apollo">
+                          <Database className="h-3.5 w-3.5 text-violet-600" />
+                        </span>
+                      )}
+                      {c.ai_brief && (
+                        <span title="Tiene AI brief">
+                          <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                        </span>
+                      )}
                     </div>
                     {(c.sector || c.headcount_range) && (
                       <div className="text-xs text-muted-foreground mt-0.5">
-                        {[c.sector, c.headcount_range && `${c.headcount_range} emp`, c.location_ciudad, c.organization_revenue_printed]
-                          .filter(Boolean)
+                        {[c.sector, c.headcount_range && `${c.headcount_range} emp`, c.location_ciudad, formatRevenue(c.organization_revenue, c.organization_revenue_printed)]
+                          .filter((s) => s && s !== "—")
                           .join(" · ")}
                       </div>
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={Number(r.last_combined_score) > 20 ? "success" : Number(r.last_combined_score) > 5 ? "info" : "secondary"}>
-                      {Number(r.last_combined_score || 0).toFixed(1)}
+                    <Badge
+                      variant={Number(r.last_combined_score) >= 0.6 ? "success" : Number(r.last_combined_score) >= 0.4 ? "info" : Number(r.last_combined_score) >= 0.2 ? "secondary" : "destructive"}
+                      title={`fit ${Number(r.last_fit_score || 0).toFixed(2)} · intent ${Number(r.last_intent_score || 0).toFixed(2)}`}
+                    >
+                      {(Number(r.last_combined_score || 0) * 100).toFixed(0)}
                     </Badge>
                   </TableCell>
                   <TableCell>

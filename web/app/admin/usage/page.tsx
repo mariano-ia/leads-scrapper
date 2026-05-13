@@ -1,3 +1,4 @@
+import { Terminal } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -92,6 +93,45 @@ export default async function AdminUsagePage() {
               ))}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Terminal className="h-4 w-4" /> Jobs operativos</CardTitle>
+          <CardDescription>Cómo correr los procesos de datos desde la consola</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div>
+            <div className="font-medium">Sync inicial del universo (0 créditos)</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.apollo_sync --mode initial</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Trae empresas nuevas de Apollo Search aplicando los filtros del universe master. Usar la primera vez o cuando se amplían los filtros.</p>
+          </div>
+          <div>
+            <div className="font-medium">Refresh delta (0 créditos)</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.apollo_sync --mode delta</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Re-corre Apollo Search y hace UPSERT — actualiza intent_strength, growth, revenue. <strong>Correr una vez por semana</strong> para mantener señales frescas.</p>
+          </div>
+          <div>
+            <div className="font-medium">Enrich pendientes (1 créd/empresa)</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.enrich_pending --limit 50</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Toma N empresas del radar sin enrich y completa sector/headcount/ciudad/tech. El budget guardrail bloquea si se cruza el hard-stop.</p>
+          </div>
+          <div>
+            <div className="font-medium">Generar AI briefs (~$0.003/empresa)</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.generate_briefs --limit 50</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Genera briefs Claude para empresas enriched sin brief. Requiere crédito en Anthropic.</p>
+          </div>
+          <div>
+            <div className="font-medium">Scrape BO Nacional (signals propios)</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.scrape_bo --days 7</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Levanta avisos del BO de los últimos N días, matchea contra empresas existentes y crea signals. Default 7 días — correr semanal.</p>
+          </div>
+          <div>
+            <div className="font-medium">Mandar digest de alerts</div>
+            <pre className="bg-muted rounded p-2 text-xs mt-1 overflow-x-auto"><code>python -m leads_scrapper.jobs.send_alerts</code></pre>
+            <p className="text-xs text-muted-foreground mt-1">Mira matches nuevos de las últimas 24h por search activa y manda email vía Resend. Correr diario por cron.</p>
+          </div>
         </CardContent>
       </Card>
 
