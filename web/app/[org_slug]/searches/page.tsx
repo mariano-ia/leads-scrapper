@@ -37,7 +37,7 @@ export default async function SearchesPage({ params }: { params: { org_slug: str
           {searches.map((s) => (
             <Card key={s.id}>
               <CardContent className="p-4 flex justify-between items-center">
-                <div>
+                <Link href={`/${org.slug}/searches/${s.id}`} className="flex-1 hover:underline">
                   <div className="font-medium">{s.name}</div>
                   <div className="text-xs text-muted-foreground">
                     Creada {timeAgo(s.created_at)} · min score {s.min_combined_score}
@@ -45,7 +45,7 @@ export default async function SearchesPage({ params }: { params: { org_slug: str
                   {s.llm_filter_text && (
                     <p className="text-xs text-muted-foreground mt-1 italic">"{s.llm_filter_text.slice(0, 120)}…"</p>
                   )}
-                </div>
+                </Link>
                 <div className="flex items-center gap-2">
                   {s.alert_enabled ? (
                     <Badge variant="success"><Bell className="h-3 w-3 mr-1" />alertas on</Badge>

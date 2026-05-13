@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusSelect } from "@/components/status-select";
+import { OwnerSelect } from "@/components/owner-select";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
@@ -59,6 +60,26 @@ export default async function RadarPage({
     counts[s] = (counts[s] || 0) + 1;
   }
 
+  // Owners: fetch current owner per org_company + members list
+  const orgCompanyIds = (rows || []).map((r: any) => r.id);
+  const { data: owners } = await svc
+    .from("org_company_owners")
+    .select("org_company_id, user_id")
+    .in("org_company_id", orgCompanyIds.length > 0 ? orgCompanyIds : ["00000000-0000-0000-0000-000000000000"]);
+  const ownerByOc = new Map<string, string>();
+  for (const o of owners || []) ownerByOc.set(o.org_company_id, o.user_id);
+
+  const { data: memberRows } = await svc
+    .from("org_members")
+    .select("user_id")
+    .eq("org_id", org.id);
+  const memberUserIds = (memberRows || []).map((m) => m.user_id);
+  const { data: usersList } = await svc.auth.admin.listUsers();
+  const members = memberUserIds.map((id) => ({
+    user_id: id,
+    email: usersList?.users.find((u) => u.id === id)?.email || id,
+  }));
+
   return (
     <div className="space-y-4">
       <div>
@@ -94,6 +115,7 @@ export default async function RadarPage({
               <TableHead>Score</TableHead>
               <TableHead>Growth 12m</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Owner</TableHead>
               <TableHead>Match</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
@@ -147,6 +169,14 @@ export default async function RadarPage({
                   <TableCell>
                     <StatusSelect orgSlug={org.slug} orgCompanyId={r.id} current={r.status as any} />
                   </TableCell>
+                  <TableCell>
+                    <OwnerSelect
+                      orgSlug={org.slug}
+                      orgCompanyId={r.id}
+                      currentOwnerId={ownerByOc.get(r.id) || null}
+                      members={members}
+                    />
+                  </TableCell>
                   <TableCell className="text-muted-foreground text-xs">{timeAgo(r.first_matched_at)}</TableCell>
                   <TableCell className="text-right">
                     <Link href={`/${org.slug}/companies/${c.id}`}>
@@ -160,7 +190,7 @@ export default async function RadarPage({
             })}
             {(!rows || rows.length === 0) && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                   Sin empresas en el radar todavía. Creá una <Link href={`/${org.slug}/searches/new`} className="text-blue-600 hover:underline">search</Link> para empezar.
                 </TableCell>
               </TableRow>

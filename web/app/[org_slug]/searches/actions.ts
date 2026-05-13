@@ -5,6 +5,61 @@ import { redirect } from "next/navigation";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 
+export async function updateSearchAction(orgSlug: string, searchId: string, formData: FormData) {
+  const user = await requireAuth();
+  const { org } = await requireOrgMembership(orgSlug, user.id);
+
+  const name = (formData.get("name") as string)?.trim();
+  const llmFilter = (formData.get("llm_filter_text") as string)?.trim() || null;
+  const alertEnabled = formData.get("alert_enabled") === "on";
+  const alertEmail = (formData.get("alert_email") as string)?.trim() || user.email || null;
+  const headcountMin = Number(formData.get("headcount_min")) || null;
+  const headcountMax = Number(formData.get("headcount_max")) || null;
+  const foundedMin = Number(formData.get("founded_year_min")) || null;
+  const active = formData.get("active") === "on";
+
+  if (!name) return { error: "Falta el nombre" };
+
+  const svc = createSupabaseServiceClient();
+  const { data: current } = await svc
+    .from("searches")
+    .select("filters")
+    .eq("id", searchId)
+    .eq("org_id", org.id)
+    .single();
+  if (!current) return { error: "Search no encontrada" };
+
+  const filters: any = { ...(current.filters || {}) };
+  filters.fit = { ...(filters.fit || {}), headcount_min: headcountMin, headcount_max: headcountMax, founded_year_min: foundedMin };
+
+  const { error } = await svc.from("searches").update({
+    name,
+    filters,
+    llm_filter_text: llmFilter,
+    alert_enabled: alertEnabled,
+    alert_email: alertEmail,
+    active,
+  }).eq("id", searchId).eq("org_id", org.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath(`/${orgSlug}/searches`);
+  redirect(`/${orgSlug}/searches`);
+}
+
+export async function deleteSearchAction(orgSlug: string, searchId: string) {
+  const user = await requireAuth();
+  const { org, role } = await requireOrgMembership(orgSlug, user.id);
+  if (role !== "admin") return { error: "Solo admins pueden borrar searches" };
+
+  const svc = createSupabaseServiceClient();
+  const { error } = await svc.from("searches").delete().eq("id", searchId).eq("org_id", org.id);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/${orgSlug}/searches`);
+  redirect(`/${orgSlug}/searches`);
+}
+
 export async function createSearchAction(orgSlug: string, formData: FormData) {
   const user = await requireAuth();
   const { org } = await requireOrgMembership(orgSlug, user.id);
