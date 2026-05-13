@@ -111,9 +111,9 @@ CREATE TABLE signals (
 
 CREATE INDEX idx_signals_company_occurred ON signals(company_id, occurred_at DESC);
 CREATE INDEX idx_signals_type_occurred ON signals(type, occurred_at DESC);
-CREATE INDEX idx_signals_recent
-  ON signals(occurred_at DESC)
-  WHERE occurred_at > now() - interval '180 days';
+-- Full index on occurred_at (partial con now() no es permitido en Postgres
+-- porque now() no es IMMUTABLE). Cubre queries de "señales recientes".
+CREATE INDEX idx_signals_occurred ON signals(occurred_at DESC);
 
 -- =============================================================================
 -- signal_type_config
