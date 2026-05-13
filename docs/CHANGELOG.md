@@ -2,6 +2,76 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 6: Botón master "Calificar" + scrapers propios poblando signals
+
+### Pregunta del usuario
+> ¿No podemos traer los contactos con el enrich?? ¿Estamos corriendo nuestro scrapping?
+
+Respuesta: **antes NO, ahora SÍ a ambas.**
+
+### Botón master "Calificar empresa" (1 click → todo)
+Nuevo `qualifyCompanyAction(orgSlug, companyId)` que combina en serie:
+1. `enrichCompanyAction` (1 cred · solo si falta sector)
+2. `fetchContactsAction` (1-5 cred · max 5 decision makers con email reveal)
+3. `generateBriefAction` (~$0.003 Claude · si hay sector y falta brief)
+
+Devuelve un step-by-step report `{ name, ok, detail }[]` mostrado como toast multi-línea.
+
+UI: el detalle ahora tiene 1 botón principal **"Calificar empresa"** + dropdown para acciones individuales (Enrich solo / Contactos solo / Brief solo) como fallback.
+
+Costo total típico: **2-6 créditos Apollo + ~$0.003 Claude por empresa.**
+
+### Scrapers propios CORRIENDO
+Antes: `signals` table tenía 0 rows. Workflow estaba como stub.
+
+Ahora: **216 signals reales poblados** por el nuevo scraper Google News RSS sobre top 50 empresas por growth_12m.
+
+Nuevo `scrapers/src/leads_scrapper/scrapers/google_news.py`:
+- Query Google News RSS con `intitle:"<razon_social>" -site:dominio -site:linkedin.com/company -site:glassdoor.com -site:indeed.com -site:computrabajo.com`.
+- Skip empresas con nombre ambiguo de 1 palabra común (Humana, Norte, Plus, etc.) — producen solo ruido.
+- Skip sources spam conocidos (e.g. "American Association of Teachers of Japanese" que aparece con guías SEO falsas).
+- Filtro temporal: solo noticias últimos 90 días.
+- Categorizador con weights por tipo de evento:
+  - `funding_round`: 40 (ronda/financing/recauda/serie A-C)
+  - `c_level_hire`: 30 (designa CTO/CEO, head of)
+  - `expansion_or_launch`: 25 (lanza/abre/adquiere)
+  - `partnership`: 20 (alianza/joint venture)
+  - `press_mention`: 10 (mention genérica)
+
+Nuevo job `scrape_news.py`:
+- Combina empresas del radar (prioridad) + top growth_12m del universo.
+- Dedup por URL post-fetch.
+- Paralelo con `Semaphore(5)` para no rate-limitar Google.
+- Logging estructurado + scrape_runs row.
+
+Migration **0012_signals_press_mention.sql**: amplía constraint `signals_type_valid` para incluir `press_mention`, `funding_round`, `c_level_hire`, `expansion_or_launch`, `partnership`.
+
+Bulk rescore SQL post-scrape:
+```sql
+WITH sigs AS (
+  SELECT company_id, LEAST(0.30, SUM(intent_weight)/100) AS boost
+  FROM signals WHERE occurred_at >= now() - interval '180 days'
+  GROUP BY company_id
+)
+UPDATE org_companies oc SET
+  last_intent_score = LEAST(1.0, oc.last_intent_score + s.boost),
+  last_combined_score = ...
+FROM sigs s WHERE oc.company_id = s.company_id;
+```
+→ **65 rows del radar re-puntuados con signal weights**.
+
+### Workflow GitHub Actions actualizado
+`daily_scrape.yml` ahora:
+- Job `scrape_news` (Google News, diario 9 UTC = 6am AR).
+- Job `scrape_bo` (Boletín Oficial, continúa even si falla — falta CUITs en companies).
+- Soporta `workflow_dispatch` con inputs `top_growth` y `per_company_max`.
+
+### Signals reales encontradas (top intent)
+- **MiradorTEC** · funding_round (40) · fondo INNOVA CFI
+- **Biobellus** · expansion_or_launch (25) · lanzamiento kits viajes
+- **DACAS** · partnership (20) · alianza con Arista Networks
+- **Sociedad Central de Arquitectos** · expansion_or_launch (25) · lanzamiento 5° edición
+
 ## 2026-05-13 · Sesión 5: BUG fix crítico contactos (endpoint deprecado + reveal flow)
 
 ### Root cause

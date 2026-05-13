@@ -5,9 +5,19 @@ on:
     # Lunes a sábado 9am UTC = 6am Argentina
     - cron: "0 9 * * 1-6"
   workflow_dispatch:
+    inputs:
+      top_growth:
+        description: "N empresas top growth a escrapear (extra al radar)"
+        required: false
+        default: "100"
+      per_company_max:
+        description: "Max items por empresa"
+        required: false
+        default: "3"
 
 jobs:
-  scrape:
+  scrape_news:
+    name: Scrape Google News
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,11 +33,38 @@ jobs:
         working-directory: scrapers
         run: pip install -e .
 
-      - name: Daily scrape (Week 3 implementación)
+      - name: Run Google News scraper
         working-directory: scrapers
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          echo "Stub - implementation in Week 3"
-          exit 0
+          python -m leads_scrapper.jobs.scrape_news \
+            --top-growth ${{ inputs.top_growth || '100' }} \
+            --per-company-max ${{ inputs.per_company_max || '3' }} \
+            --concurrency 5
+
+  scrape_bo:
+    name: Scrape Boletín Oficial
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scrapers/pyproject.toml
+
+      - name: Install
+        working-directory: scrapers
+        run: pip install -e .
+
+      - name: Run BO scraper (best-effort, matchea por CUIT)
+        working-directory: scrapers
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        continue-on-error: true
+        run: python -m leads_scrapper.jobs.scrape_bo

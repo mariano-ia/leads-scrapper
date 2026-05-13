@@ -471,3 +471,72 @@ Tono: directo, sin marketing-speak, sin adjetivos vacíos. Castellano rioplatens
     return { error: e?.message || "Error desconocido" };
   }
 }
+
+/**
+ * Calificar empresa: enrich + contactos + brief en una sola pasada (1 click).
+ *
+ * Ejecuta en serie, devuelve un resumen step-by-step. Diseñado para el botón
+ * principal del detalle.
+ *
+ * Costo total: 2-6 créditos Apollo (1 enrich + N contactos) + ~$0.003 Claude.
+ */
+export async function qualifyCompanyAction(
+  orgSlug: string,
+  companyId: string,
+  opts?: { maxContacts?: number; skipBrief?: boolean }
+) {
+  const user = await requireAuth();
+  await requireOrgMembership(orgSlug, user.id);
+
+  const svc = createSupabaseServiceClient();
+  const { data: company } = await svc
+    .from("companies")
+    .select("id, sector, ai_brief")
+    .eq("id", companyId)
+    .single();
+  if (!company) return { error: "Empresa no encontrada" };
+
+  const steps: { name: string; ok: boolean; detail: string }[] = [];
+
+  // 1) Enrich (si falta sector)
+  if (!company.sector) {
+    const r = await enrichCompanyAction(orgSlug, companyId);
+    if (r?.error) steps.push({ name: "enrich", ok: false, detail: r.error });
+    else steps.push({ name: "enrich", ok: true, detail: "sector + headcount + ciudad + tech" });
+  } else {
+    steps.push({ name: "enrich", ok: true, detail: "ya estaba (skip)" });
+  }
+
+  // 2) Contactos
+  const c = await fetchContactsAction(orgSlug, companyId, { max: opts?.maxContacts ?? 5 });
+  if (c?.error) {
+    steps.push({ name: "contactos", ok: false, detail: c.error });
+  } else {
+    const parts: string[] = [];
+    if (c.valid_contacts) parts.push(`${c.valid_contacts} válido${c.valid_contacts !== 1 ? "s" : ""}`);
+    if (c.generic_contacts) parts.push(`${c.generic_contacts} genérico${c.generic_contacts !== 1 ? "s" : ""}`);
+    if (c.credits) parts.push(`${c.credits} créd`);
+    steps.push({
+      name: "contactos",
+      ok: (c.valid_contacts || 0) > 0,
+      detail: parts.join(" · ") || `Apollo tiene ${c.total_in_apollo ?? 0} pero ninguna decisional`,
+    });
+  }
+
+  // 3) Brief (skipeable). Requiere sector poblado.
+  if (!opts?.skipBrief) {
+    const { data: now } = await svc.from("companies").select("sector, ai_brief").eq("id", companyId).single();
+    if (now?.sector && !now.ai_brief) {
+      const b = await generateBriefAction(orgSlug, companyId);
+      if (b?.error) steps.push({ name: "brief", ok: false, detail: b.error });
+      else steps.push({ name: "brief", ok: true, detail: "Claude Sonnet" });
+    } else if (now?.ai_brief) {
+      steps.push({ name: "brief", ok: true, detail: "ya tenía (skip)" });
+    } else {
+      steps.push({ name: "brief", ok: false, detail: "enrich falló → sin sector" });
+    }
+  }
+
+  revalidatePath(`/${orgSlug}/companies/${companyId}`);
+  return { success: true, steps };
+}
