@@ -1,0 +1,1 @@
+-- Seed data se aplica via migrations 0005-0007.

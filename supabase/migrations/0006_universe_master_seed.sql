@@ -1,0 +1,37 @@
+-- Migration 0006: seed inicial de universe_master_versions v1
+-- NOTA: created_by debe apuntar a un user real. Se aplica manualmente
+-- después de crear el super-admin en Week 2.
+-- Este archivo queda como referencia; el seed real lo aplica un script.
+
+-- Placeholder INSERT comentado — se ejecuta vía script en Week 2:
+-- INSERT INTO universe_master_versions (version_int, config, created_by, activated_at, is_active)
+-- VALUES (
+--   1,
+--   '{
+--     "location_country": "AR",
+--     "headcount_min": 10,
+--     "headcount_max": 500,
+--     "founded_year_min": 2005,
+--     "founded_year_max": null,
+--     "industries": [
+--       "Information Technology and Services",
+--       "Marketing and Advertising",
+--       "Retail",
+--       "Construction",
+--       "Logistics and Supply Chain",
+--       "Real Estate",
+--       "Food and Beverages",
+--       "Wholesale",
+--       "Manufacturing",
+--       "Professional Services"
+--     ],
+--     "exclude_industries": ["Defense", "Tobacco", "Gambling"],
+--     "keywords_any": [],
+--     "max_companies_target": 15000
+--   }'::jsonb,
+--   '<SUPER_ADMIN_USER_ID>',
+--   now(),
+--   true
+-- );
+
+SELECT 'universe_master seed placeholder applied' AS info;
