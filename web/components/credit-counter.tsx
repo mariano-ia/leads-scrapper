@@ -30,7 +30,7 @@ export async function CreditCounterWidget() {
           <span>{formatNumber(remaining)} disp.</span>
         </div>
         <div className="text-xs text-muted-foreground border-t pt-2">
-          Plan {data.apollo_plan_name} · ${data.apollo_plan_monthly_usd}/mes · {data.year_month}
+          Plan {data.apollo_plan_name} · {data.year_month}
         </div>
       </CardContent>
     </Card>
