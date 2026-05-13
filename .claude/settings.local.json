@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:awesome-skills.com)",
+      "WebFetch(domain:github.com)",
+      "Read(//Users/marianonoceti/.claude/**)",
+      "Bash(mkdir -p ~/.claude/plugins)",
+      "Bash(git clone *)",
+      "mcp__claude_ai_Supabase__list_organizations",
+      "mcp__claude_ai_Supabase__list_projects"
+    ]
+  }
+}

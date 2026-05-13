@@ -47,7 +47,7 @@ export async function createSearchAction(orgSlug: string, formData: FormData) {
   };
 
   const svc = createSupabaseServiceClient();
-  const { error } = await svc.from("searches").insert({
+  const { data: searchRow, error } = await svc.from("searches").insert({
     org_id: org.id,
     name,
     filters,
@@ -58,9 +58,40 @@ export async function createSearchAction(orgSlug: string, formData: FormData) {
     min_combined_score: 0.3,
     active: true,
     created_by: user.id,
-  });
+  }).select("id").single();
 
   if (error) return { error: error.message };
+
+  // Backfill org_companies con empresas que matcheen los fit filters básicos
+  if (searchRow) {
+    let q = svc
+      .from("companies")
+      .select("id, organization_headcount_twelve_month_growth")
+      .eq("status", "active")
+      .limit(500);
+    if (headcountMin != null) {
+      // Approximation: usar founded_year como proxy de tamaño no se puede; skipping
+      // direct headcount filter porque companies.headcount_range es string ("20-49").
+      // Para F0 nos basamos en growth + intent en post-filter.
+    }
+    if (foundedMin != null) {
+      q = q.gte("founded_year", foundedMin);
+    }
+    const { data: candidates } = await q;
+    if (candidates && candidates.length > 0) {
+      const rows = candidates.map((c: any) => ({
+        org_id: org.id,
+        company_id: c.id,
+        last_search_id: searchRow.id,
+        first_matched_at: new Date().toISOString(),
+        last_fit_score: 0.5,
+        last_intent_score: 0,
+        last_combined_score: 0.5,
+        status: "new",
+      }));
+      await svc.from("org_companies").upsert(rows, { onConflict: "org_id,company_id", ignoreDuplicates: false });
+    }
+  }
 
   revalidatePath(`/${orgSlug}/searches`);
   redirect(`/${orgSlug}/searches`);
