@@ -40,11 +40,18 @@ export function CompanyActions({
   function handleFetchContacts() {
     startFetch(async () => {
       const result = await fetchContactsAction(orgSlug, companyId, { max: 5 });
-      if (result?.error) toast.error(result.error);
-      else
-        toast.success(
-          `${result.count ?? 0} contactos encontrados${result.revealed ? ` · ${result.revealed} cred Apollo` : ""}`
-        );
+      if (result?.error) {
+        toast.error(result.error);
+        return;
+      }
+      const parts: string[] = [];
+      if (result.valid_contacts) parts.push(`${result.valid_contacts} contacto${result.valid_contacts !== 1 ? "s" : ""} válido${result.valid_contacts !== 1 ? "s" : ""}`);
+      if (result.generic_contacts) parts.push(`${result.generic_contacts} genérico${result.generic_contacts !== 1 ? "s" : ""} (info@/contacto@)`);
+      if (result.credits) parts.push(`${result.credits} crédito${result.credits !== 1 ? "s" : ""}`);
+      const msg = parts.length > 0
+        ? parts.join(" · ")
+        : `Apollo tiene ${result.total_in_apollo ?? 0} personas pero ninguna con título decisional`;
+      toast.success(msg);
     });
   }
 

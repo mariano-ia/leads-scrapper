@@ -23,7 +23,7 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
 
   const { data: company } = await svc
     .from("companies")
-    .select("id, dominio, apollo_id")
+    .select("id, dominio, apollo_id, apollo_data")
     .eq("id", companyId)
     .single();
 
@@ -77,6 +77,19 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
       return "1000+";
     })();
 
+    // tech_stack puede venir como string[] o como objeto[]. Normalizamos a string[].
+    const techRaw = org.technology_names || org.technologies || [];
+    const techNorm = Array.isArray(techRaw)
+      ? techRaw.map((t: any) => (typeof t === "string" ? t : t?.name || null)).filter(Boolean)
+      : [];
+
+    // Merge nuevo payload sobre el apollo_data jsonb existente (mantener fields del search).
+    const mergedApolloData = {
+      ...(company.apollo_data || {}),
+      _enrich: org,
+      _enriched_at: new Date().toISOString(),
+    };
+
     const update: Record<string, any> = {
       sector: org.industry,
       subsector: org.sub_industry,
@@ -84,12 +97,16 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
       location_pais: org.country || "AR",
       location_provincia: org.state,
       location_ciudad: org.city,
-      tech_stack: org.technology_names || org.technologies || [],
+      tech_stack: techNorm,
+      apollo_data: mergedApolloData,
       last_apollo_sync_at: new Date().toISOString(),
     };
-    // Limpiar nulls/empty arrays
+    // Limpiar nulls/empty arrays (excepto apollo_data + last_apollo_sync_at que siempre van)
     const cleaned = Object.fromEntries(
-      Object.entries(update).filter(([_, v]) => v != null && (!Array.isArray(v) || v.length > 0))
+      Object.entries(update).filter(([k, v]) => {
+        if (k === "apollo_data" || k === "last_apollo_sync_at") return true;
+        return v != null && (!Array.isArray(v) || v.length > 0);
+      })
     );
 
     await svc.from("companies").update(cleaned).eq("id", companyId);
@@ -117,8 +134,69 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
 }
 
 /**
- * Buscar contactos (decision makers) en Apollo people search.
- * Consume hasta `max` créditos (1 por persona con email revealed).
+ * Generic emails que NO consideramos leads calificados.
+ * Si Apollo devuelve uno de estos al hacer reveal, lo guardamos pero NO lo marcamos
+ * como decision-maker y NO suma como "contacto válido".
+ */
+const GENERIC_EMAIL_PREFIXES = [
+  "info", "contacto", "contact", "hello", "hola", "admin", "soporte", "support",
+  "ventas", "sales", "marketing", "rrhh", "hr", "jobs", "press", "comercial",
+  "atencion", "atencionalcliente", "no-reply", "noreply", "donotreply",
+];
+
+function isGenericEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const local = email.split("@")[0]?.toLowerCase() || "";
+  return GENERIC_EMAIL_PREFIXES.some((p) => local === p || local.startsWith(`${p}.`) || local.startsWith(`${p}@`));
+}
+
+/**
+ * Decision-maker detection por título — funciona incluso cuando Apollo no
+ * popula `seniority` (común en PYMEs argentinas).
+ */
+function detectDecisionMaker(title: string | null | undefined, seniority?: string | null): boolean {
+  if (seniority) {
+    const s = seniority.toLowerCase();
+    if (["c_suite", "founder", "owner", "partner", "head", "vp", "director"].includes(s)) {
+      return true;
+    }
+  }
+  if (!title) return false;
+  const t = title.toLowerCase();
+  const kws = [
+    "ceo", "cto", "coo", "cfo", "cmo", "cio", "chief", "founder", "fundador",
+    "co-founder", "cofounder", "owner", "dueño", "duena",
+    "president", "presidente", "vp ", "vice president",
+    "director", "directora", "head of", "gerente general", "general manager",
+    "managing director", "partner", "socio", "socia",
+  ];
+  return kws.some((kw) => t.includes(kw));
+}
+
+/**
+ * Score 0..1 por título para priorizar quiénes revelar primero (más cred efficient).
+ */
+function titleScore(title: string | null | undefined): number {
+  if (!title) return 0.3;
+  const t = title.toLowerCase();
+  if (/(ceo|founder|fundador|owner|dueñ|president|chief executive)/.test(t)) return 1.0;
+  if (/(cto|cmo|cfo|coo|cio|chief|managing director)/.test(t)) return 0.9;
+  if (/(director|head of|vp |vice president|general manager|gerente general)/.test(t)) return 0.8;
+  if (/(manager|gerente|lead|jefe)/.test(t)) return 0.5;
+  if (/(senior|sr\.|principal)/.test(t)) return 0.4;
+  return 0.3;
+}
+
+/**
+ * Buscar decision makers en Apollo people search (api_search) + revelar email
+ * vía /people/match. Solo cobramos crédito por reveal exitoso.
+ *
+ * Flow:
+ *   1. POST /mixed_people/api_search por organization_id → lista ofuscada (free).
+ *   2. Filtrar por título decisional + has_email=true.
+ *   3. Por cada uno, POST /people/match con reveal_personal_emails=true (1 cred).
+ *   4. Filtrar emails genéricos (info@, contacto@...).
+ *   5. UPSERT en company_contacts.
  */
 export async function fetchContactsAction(
   orgSlug: string,
@@ -142,7 +220,7 @@ export async function fetchContactsAction(
   if (!company) return { error: "Empresa no encontrada" };
   if (!company.apollo_id) return { error: "Empresa sin apollo_id — no se puede buscar contactos" };
 
-  // Budget check
+  // Budget check — capamos a max créditos
   const ym = new Date().toISOString().slice(0, 7);
   const [{ data: cfg }, { data: usage }] = await Promise.all([
     svc.from("apollo_budget_config").select("*").limit(1).single(),
@@ -156,70 +234,111 @@ export async function fetchContactsAction(
     }
   }
 
-  // Apollo people search por organization_id
   try {
-    const body = {
-      organization_ids: [company.apollo_id],
-      person_titles: [
-        "CEO",
-        "Founder",
-        "Co-Founder",
-        "CTO",
-        "Chief Technology Officer",
-        "COO",
-        "Head of Digital",
-        "Director",
-        "Director General",
-      ],
-      person_seniorities: ["c_suite", "founder", "owner", "partner", "head", "vp", "director"],
-      page: 1,
-      per_page: max,
-    };
-    const apolloRes = await fetch("https://api.apollo.io/api/v1/mixed_people/search", {
+    // STEP 1 — listado ofuscado, gratis. Sin filtros de seniority (en PYMEs argentinas
+    // Apollo no la popula). Traemos hasta 25 y filtramos en código.
+    const searchRes = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
       method: "POST",
       headers: {
         "X-Api-Key": apolloKey,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        organization_ids: [company.apollo_id],
+        page: 1,
+        per_page: 25,
+      }),
     });
-    if (!apolloRes.ok) {
-      const txt = await apolloRes.text();
-      return { error: `Apollo ${apolloRes.status}: ${txt.slice(0, 200)}` };
+    if (!searchRes.ok) {
+      const txt = await searchRes.text();
+      return { error: `Apollo search ${searchRes.status}: ${txt.slice(0, 200)}` };
     }
-    const data = await apolloRes.json();
-    const people: any[] = data.people || data.contacts || [];
-    if (people.length === 0) {
-      return { error: "Apollo no encontró decision makers para esta empresa" };
+    const searchData = await searchRes.json();
+    const allPeople: any[] = searchData.people || [];
+
+    if (allPeople.length === 0) {
+      return { error: "Apollo no tiene personas indexadas para esta empresa" };
     }
 
-    let revealedCount = 0;
-    const rows = people.map((p) => {
-      const fullName = p.name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "(sin nombre)";
-      const isDM =
-        ["c_suite", "founder", "owner", "partner"].includes(p.seniority) ||
-        ["ceo", "founder", "cto", "coo", "cfo", "chief", "head of"].some((kw) =>
-          (p.title || "").toLowerCase().includes(kw)
-        );
-      if (p.email && p.email !== "email_not_unlocked@domain.com") revealedCount++;
+    // STEP 2 — priorizar candidatos: score por título × has_email, top `max`.
+    const ranked = allPeople
+      .map((p) => ({
+        person: p,
+        score: titleScore(p.title) * (p.has_email ? 1 : 0.2),
+      }))
+      .filter((x) => x.score >= 0.5)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, max);
+
+    if (ranked.length === 0) {
       return {
-        company_id: companyId,
-        apollo_person_id: p.id as string,
-        full_name: fullName,
-        title: p.title || null,
-        email: p.email && p.email !== "email_not_unlocked@domain.com" ? p.email : null,
-        email_status: p.email_status || null,
-        linkedin_url: p.linkedin_url || null,
-        phone: p.sanitized_phone || p.phone || null,
-        is_decision_maker: isDM,
-        source: "apollo",
-        last_synced_at: new Date().toISOString(),
+        error: `Apollo encontró ${allPeople.length} personas pero ninguna con título decisional (CEO/CTO/Director/Head/Manager)`,
       };
-    });
+    }
 
-    // Upsert por apollo_person_id (algunos pueden no tener email, así que no usamos el UNIQUE company_id,email)
-    for (const row of rows) {
+    // STEP 3 — reveal en paralelo (cada uno cuesta 1 cred, ya capado por `max`)
+    const revealed = await Promise.all(
+      ranked.map(async (r) => {
+        try {
+          const matchRes = await fetch("https://api.apollo.io/api/v1/people/match", {
+            method: "POST",
+            headers: {
+              "X-Api-Key": apolloKey,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({
+              id: r.person.id,
+              reveal_personal_emails: true,
+              reveal_phone_number: false,
+            }),
+          });
+          if (!matchRes.ok) return { ok: false, person: r.person, error: matchRes.status };
+          const matchData = await matchRes.json();
+          return { ok: true, person: r.person, match: matchData.person || {} };
+        } catch (e: any) {
+          return { ok: false, person: r.person, error: e?.message || "fetch_error" };
+        }
+      })
+    );
+
+    // STEP 4 — upsert
+    let creditsConsumed = 0;
+    let validContacts = 0;
+    let genericContacts = 0;
+    const now = new Date().toISOString();
+
+    for (const r of revealed) {
+      if (!r.ok || !r.match) continue;
+      const m: any = r.match;
+
+      const fullName =
+        m.name ||
+        [m.first_name, m.last_name].filter(Boolean).join(" ") ||
+        [r.person.first_name, r.person.last_name].filter(Boolean).join(" ") ||
+        "(sin nombre)";
+
+      const email = m.email || null;
+      const generic = isGenericEmail(email);
+
+      // Apollo cobra 1 cred si nos da email (genérico o no)
+      if (email) creditsConsumed++;
+
+      const row = {
+        company_id: companyId,
+        apollo_person_id: r.person.id as string,
+        full_name: fullName,
+        title: m.title || r.person.title || null,
+        email,
+        email_status: m.email_status || null,
+        linkedin_url: m.linkedin_url || r.person.linkedin_url || null,
+        phone: m.sanitized_phone || null,
+        is_decision_maker: !generic && detectDecisionMaker(m.title || r.person.title, m.seniority || r.person.seniority),
+        source: "apollo",
+        last_synced_at: now,
+      };
+
       const { data: existing } = await svc
         .from("company_contacts")
         .select("id")
@@ -231,27 +350,38 @@ export async function fetchContactsAction(
       } else {
         await svc.from("company_contacts").insert(row);
       }
+
+      if (generic) genericContacts++;
+      else if (email) validContacts++;
     }
 
     // Record credits
-    if (revealedCount > 0) {
+    if (creditsConsumed > 0) {
       if (usage) {
         await svc
           .from("apollo_credit_usage_monthly")
           .update({
-            credits_used: (usage.credits_used as number) + revealedCount,
-            last_sync_at: new Date().toISOString(),
+            credits_used: (usage.credits_used as number) + creditsConsumed,
+            last_sync_at: now,
           })
           .eq("id", usage.id);
       } else {
         await svc
           .from("apollo_credit_usage_monthly")
-          .insert({ year_month: ym, credits_used: revealedCount, last_sync_at: new Date().toISOString() });
+          .insert({ year_month: ym, credits_used: creditsConsumed, last_sync_at: now });
       }
     }
 
     revalidatePath(`/${orgSlug}/companies/${companyId}`);
-    return { success: true, count: people.length, revealed: revealedCount };
+    return {
+      success: true,
+      total_in_apollo: allPeople.length,
+      ranked_for_reveal: ranked.length,
+      revealed: revealed.length,
+      valid_contacts: validContacts,
+      generic_contacts: genericContacts,
+      credits: creditsConsumed,
+    };
   } catch (e: any) {
     return { error: e?.message || "Error desconocido" };
   }

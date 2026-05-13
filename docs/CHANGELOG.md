@@ -2,6 +2,44 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 5: BUG fix crítico contactos (endpoint deprecado + reveal flow)
+
+### Root cause
+El usuario probó "Enrich" en Humana, vio sector + headcount poblados, pero pidió **contactos calificados** y el botón "Buscar contactos" no traía nada. Investigación:
+
+1. **Endpoint deprecado**: Apollo cambió `/mixed_people/search` → `/mixed_people/api_search`. El endpoint viejo devuelve un error explícito ("This endpoint is deprecated for API callers"). Nuestro `fetchContactsAction` y el Python client usaban el viejo.
+
+2. **Filtros de seniority demasiado estrictos**: en empresas argentinas chicas, Apollo NO popula `seniority`. Filtrar por `["c_suite", "head", ...]` excluía 95% de los candidatos válidos. Hay que detectar decision-maker por título.
+
+3. **api_search devuelve datos ofuscados**: `last_name_obfuscated: "Be***o"`, sin email. Para revelar email verificado hay que llamar `/people/match` con `reveal_personal_emails=true` por persona (1 crédito).
+
+4. **Bug menor en enrich**: `apollo_data` jsonb se llenaba en search pero NO se mergeaba con el payload del enrich endpoint → perdíamos description, technologies completas, intent_topics activos, etc.
+
+### Fix: fetchContactsAction v2
+Nuevo flow en 3 pasos:
+- **Step 1 — api_search (gratis)**: trae hasta 25 personas ofuscadas con title + has_email.
+- **Step 2 — score por título**: prioriza candidatos. CEO/Founder=1.0, CTO/CMO/CFO=0.9, Director/Head/VP=0.8, Manager=0.5. Filtra score >= 0.5 + has_email.
+- **Step 3 — people/match en paralelo (1 cred c/u por max)**: revela name + email + linkedin + photo. Filtra emails genéricos (`info@`, `contacto@`, `ventas@`, etc.) post-reveal.
+
+Smoke test contra **Humana** (apollo_id `670e8ccaf5545f02d1e7ebb4`):
+```
+→ 4 personas indexadas en Apollo
+→ Top 2 candidatos: CFO + People Leader
+→ Revelados: Agustín Sanchez Bellocchio · agustinsb@humana.ar (verified, DM)
+             Rocío Fernandez · rocio.fernandez@humana.ar (verified, no DM)
+→ 0 genéricos, 2 créditos consumidos
+```
+
+### Toast actualizado
+Muestra `{N} contactos válidos · {M} genéricos · {K} créditos` o el motivo claro de "ninguna con título decisional".
+
+### Apollo client Python: mismo fix
+- `search_people()` ahora usa `/mixed_people/api_search` (gratis, devuelve ofuscado).
+- Nuevo método `match_person(person_id, reveal_personal_emails=True)` para hacer reveal de a una persona (1 crédito por reveal de email).
+
+### Apollo enrich: merge de apollo_data
+`enrichCompanyAction` ahora hace merge del payload del enrich endpoint sobre `apollo_data` jsonb (`apollo_data._enrich`, `apollo_data._enriched_at`). Antes lo perdíamos. También normaliza `technologies` que puede venir como string[] o objeto[].
+
 ## 2026-05-13 · Sesión 4: Contactos, scoring real, dashboard expandido
 
 ### Contactos (Apollo people search)

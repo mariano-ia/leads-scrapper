@@ -3,8 +3,14 @@
 Endpoints usados:
 - POST /api/v1/mixed_companies/search    (search empresas, 0 créditos)
 - GET  /api/v1/auth/health                (healthcheck, 0 créditos)
-- POST /api/v1/mixed_people/search        (search contactos, 1 crédito/persona reveal)
+- POST /api/v1/mixed_people/api_search    (search personas, ofuscado, 0 créditos)
+- POST /api/v1/people/match               (reveal persona, 1 crédito por reveal)
 - POST /api/v1/organizations/enrich       (enrich empresa, 1 crédito)
+
+NOTA: `/mixed_people/search` está DEPRECADO para API callers (Apollo lo flagea
+con error explícito). Hay que usar `/mixed_people/api_search`. El endpoint nuevo
+devuelve datos ofuscados (`last_name_obfuscated`, `has_email`) y para revelar
+hay que llamar `/people/match` con `reveal_personal_emails=true` por persona.
 
 ESTRATEGIA DE CRÉDITOS:
 - Initial universe sync: solo search → 0 créditos
@@ -200,12 +206,16 @@ class ApolloClient:
     async def search_people(
         self, filters: PeopleSearchFilters
     ) -> AsyncIterator[ApolloPerson]:
-        """Search de personas (decision makers). 1 crédito por persona revealed."""
-        await self._budget_or_raise(estimated_credits=filters.per_page)
+        """Search de personas (ofuscado, 0 créditos).
+
+        Devuelve `ApolloPerson` con `first_name`, `title`, `has_email` etc. pero
+        SIN email ni `last_name` completo. Para revelar email/full name usar
+        `match_person(person_id)` por persona (1 crédito por reveal).
+        """
+        await self._budget_or_raise(estimated_credits=0)
 
         async with self._build_client() as client:
             page = filters.page
-            total_revealed = 0
             while True:
                 body = filters.model_copy(update={"page": page}).to_request_body()
                 logger.info(
@@ -215,16 +225,13 @@ class ApolloClient:
                 response = await retry_request(
                     client,
                     "POST",
-                    "/mixed_people/search",
+                    "/mixed_people/api_search",
                     json=body,
                 )
                 payload = response.json()
                 people = payload.get("people") or payload.get("contacts") or []
                 for raw in people:
-                    person = ApolloPerson.from_apollo_response(raw)
-                    if person.email:
-                        total_revealed += 1
-                    yield person
+                    yield ApolloPerson.from_apollo_response(raw)
 
                 pagination = payload.get("pagination", {})
                 total_pages = pagination.get("total_pages", 1)
@@ -232,8 +239,41 @@ class ApolloClient:
                     break
                 page += 1
 
-            if total_revealed > 0:
-                await self._record_credits(total_revealed)
+    async def match_person(
+        self,
+        person_id: str,
+        *,
+        reveal_personal_emails: bool = True,
+        reveal_phone_number: bool = False,
+    ) -> ApolloPerson | None:
+        """Reveal de una persona via /people/match. 1 crédito por reveal de email.
+
+        Args:
+            person_id: Apollo person ID (obtenido de `search_people`).
+            reveal_personal_emails: si pedirle a Apollo que revele el email.
+            reveal_phone_number: si revelar phone (1 crédito adicional).
+        """
+        await self._budget_or_raise(estimated_credits=1)
+
+        async with self._build_client() as client:
+            response = await retry_request(
+                client,
+                "POST",
+                "/people/match",
+                json={
+                    "id": person_id,
+                    "reveal_personal_emails": reveal_personal_emails,
+                    "reveal_phone_number": reveal_phone_number,
+                },
+            )
+            payload = response.json()
+            person_data = payload.get("person") if isinstance(payload, dict) else None
+            if not person_data:
+                return None
+            person = ApolloPerson.from_apollo_response(person_data)
+            if person.email:
+                await self._record_credits(1)
+            return person
 
     async def get_credit_balance(self) -> dict[str, Any]:
         """Devuelve info de cuenta + créditos restantes (best-effort)."""
