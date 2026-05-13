@@ -19,7 +19,9 @@ export default async function DashboardPage({ params }: { params: { org_slug: st
     svc.from("apollo_sync_runs").select("started_at, status, companies_added").order("started_at", { ascending: false }).limit(1),
     svc
       .from("companies")
-      .select("id, name, primary_domain, founded_year, organization_headcount_twelve_month_growth, intent_strength, last_apollo_sync_at")
+      .select(
+        "id, name:razon_social, primary_domain:dominio, founded_year, organization_headcount_twelve_month_growth, intent_strength, last_apollo_sync_at"
+      )
       .order("last_apollo_sync_at", { ascending: false })
       .limit(8),
   ]);

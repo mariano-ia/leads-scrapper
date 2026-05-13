@@ -50,11 +50,11 @@ export default async function CompanyDetailPage({
 
       <div className="flex justify-between items-start gap-6">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold">{company.name}</h1>
+          <h1 className="text-2xl font-semibold">{company.razon_social}</h1>
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            {company.primary_domain && (
-              <a href={`https://${company.primary_domain}`} target="_blank" rel="noopener" className="flex items-center gap-1 hover:underline">
-                <Globe className="h-3 w-3" /> {company.primary_domain}
+            {company.dominio && (
+              <a href={`https://${company.dominio}`} target="_blank" rel="noopener" className="flex items-center gap-1 hover:underline">
+                <Globe className="h-3 w-3" /> {company.dominio}
               </a>
             )}
             {company.linkedin_url && (

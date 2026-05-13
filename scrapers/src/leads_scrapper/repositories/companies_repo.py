@@ -21,17 +21,41 @@ logger = get_logger(__name__)
 def _account_to_row(account: ApolloAccount) -> dict[str, Any]:
     """Mapea ApolloAccount (search response) → row de companies.
 
-    Solo los fields que vienen en search. industry/headcount/location/tech
-    quedan null hasta que se enriquezca.
+    Persiste tanto la data identitaria (razon_social, dominio) como los fields
+    Apollo-specific en columnas flat (growth, intent, financial, etc.) para
+    que la UI pueda querear sin parsear jsonb. industry/headcount/location/
+    tech quedan null hasta que se enriquezca.
     """
     now = datetime.now(timezone.utc).isoformat()
     return {
         "apollo_id": account.id,
         "razon_social": account.name or f"apollo_{account.id}",
         "dominio": account.primary_domain or account.website_url,
+        "website_url": account.website_url,
+        "linkedin_url": account.linkedin_url,
+        "linkedin_uid": account.linkedin_uid,
+        "twitter_url": account.twitter_url,
+        "facebook_url": account.facebook_url,
+        "logo_url": account.logo_url,
+        "phone": account.phone,
+        "sanitized_phone": account.sanitized_phone,
         "founded_year": account.founded_year,
-        "location_pais": "AR",  # asumido — el filtro Apollo lo aplicó
-        # tech_stack se completa con enrichment
+        "location_pais": "AR",
+        "market_cap": account.market_cap,
+        "organization_revenue": account.organization_revenue,
+        "organization_revenue_printed": account.organization_revenue_printed,
+        "publicly_traded_symbol": account.publicly_traded_symbol,
+        "publicly_traded_exchange": account.publicly_traded_exchange,
+        "organization_headcount_six_month_growth": account.organization_headcount_six_month_growth,
+        "organization_headcount_twelve_month_growth": account.organization_headcount_twelve_month_growth,
+        "organization_headcount_twenty_four_month_growth": account.organization_headcount_twenty_four_month_growth,
+        "intent_strength": account.intent_strength,
+        "show_intent": account.show_intent,
+        "has_intent_signal_account": account.has_intent_signal_account,
+        "owned_by_organization_id": account.owned_by_organization_id,
+        "alexa_ranking": account.alexa_ranking,
+        "sic_codes": account.sic_codes,
+        "languages": account.languages,
         "apollo_data": account.raw,
         "last_apollo_sync_at": now,
         "last_seen_at": now,

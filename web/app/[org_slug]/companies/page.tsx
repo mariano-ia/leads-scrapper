@@ -28,13 +28,16 @@ export default async function CompaniesPage({
 
   let query = svc
     .from("companies")
-    .select("id, name, primary_domain, founded_year, organization_revenue_printed, organization_headcount_twelve_month_growth, intent_strength, market_cap", { count: "exact" })
+    .select(
+      "id, name:razon_social, primary_domain:dominio, founded_year, organization_revenue_printed, organization_headcount_twelve_month_growth, intent_strength, market_cap",
+      { count: "exact" }
+    )
     .eq("status", "active")
     .order("organization_headcount_twelve_month_growth", { ascending: false, nullsFirst: false })
     .range(offset, offset + PAGE_SIZE - 1);
 
   if (q) {
-    query = query.ilike("name", `%${q}%`);
+    query = query.ilike("razon_social", `%${q}%`);
   }
 
   const { data: companies, count } = await query;
