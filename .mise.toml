@@ -1,0 +1,7 @@
+# Tool versions pinned for this repo.
+# Cualquiera que clone corre `mise install` y obtiene exactamente estas versiones.
+# https://mise.jdx.dev/
+
+[tools]
+node = "20"
+python = "3.11"
