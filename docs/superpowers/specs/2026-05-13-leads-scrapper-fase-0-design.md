@@ -984,15 +984,17 @@ Total: ~17 pantallas. Listadas con permisos requeridos.
 
 | Servicio | USD/mes | Notas |
 |---|---|---|
-| Apollo.io Basic | $99 | Fijo. Sin overages — si se agotan créditos, calls fallan hasta próximo ciclo |
-| Supabase Free | $0 | 500MB DB, 1GB Storage. Suficiente para F0 |
+| Apollo.io Basic (1 seat, billing annual) | $49 | $588/año. 30K créditos/año = ~2500/mes. Incluye API + 6 Intent Topics + Waterfall Enrichment. Sin overages |
+| Supabase (cuarto proyecto en org) | $10 | Free tier cubre 2 proyectos por org; Yacaré ya tiene 3 |
 | Vercel Hobby | $0 | Suficiente para F0 |
 | Anthropic Claude API | ~$10 | LLM filter + AI briefs con caching agresivo |
 | Resend Free | $0 | 3K emails/mes |
 | GitHub Actions | $0 | 2K min/mes (uso estimado <500 min) |
 | Sentry Free | $0 | Opcional. 5K events/mes |
 | Dominio | ~$1 | Prorrateado |
-| **Total** | **~$110** | Margen para Claude API si escala |
+| **Total** | **~$70** | Bien por debajo del ceiling $100 |
+
+**Importante sobre Apollo pricing per-seat**: $49/mes es por **seat de Apollo**, no por usuario de nuestra plataforma. 1 seat alcanza para todo F0 — los usuarios de nuestra app no consumen seats Apollo (acceden via API key del backend). Agregar orgs/usuarios a nuestra plataforma NO multiplica el costo Apollo. Lo que escala es créditos consumidos, controlado por budget guardrail (alerts 70/85/95% + hard stop 100%).
 
 ## 14. Riesgos y mitigaciones
 
