@@ -1,0 +1,41 @@
+name: Apollo Sync (weekly)
+
+on:
+  schedule:
+    # Lunes 7am UTC = 4am Argentina
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Sync mode"
+        required: true
+        default: "delta"
+        type: choice
+        options: [initial, delta, targeted_contacts]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scrapers/pyproject.toml
+
+      - name: Install
+        working-directory: scrapers
+        run: pip install -e .
+
+      - name: Run Apollo sync
+        working-directory: scrapers
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: python -m leads_scrapper.jobs.apollo_sync --mode ${{ inputs.mode || 'delta' }}
