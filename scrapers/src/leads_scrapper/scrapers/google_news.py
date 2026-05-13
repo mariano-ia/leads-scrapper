@@ -96,6 +96,7 @@ def _categorize_news(title: str, summary: str) -> tuple[str, float]:
     Weights altos = señal fuerte de momento de compra:
     - funding/financing: 40
     - hiring (c-level): 30
+    - hiring (tech/ai/data): 25
     - expansion / new product: 25
     - partnership / deal: 20
     - press mention general: 10
@@ -103,8 +104,10 @@ def _categorize_news(title: str, summary: str) -> tuple[str, float]:
     text = f"{title} {summary}".lower()
     if re.search(r"\b(ronda|funding|inversi[oó]n|invierte|recauda|capital seed|serie [a-c])\b", text):
         return ("funding_round", 40.0)
-    if re.search(r"\b(contrat[aó]|design[aó]|nombra|incorpora|sumo a|nuevo cto|nuevo ceo|nueva cfo|head of)\b", text):
+    if re.search(r"\b(designa|nombra|incorpora|nuevo cto|nuevo ceo|nueva cfo|head of|head digital|jefe digital|director general|chief)\b", text):
         return ("c_level_hire", 30.0)
+    if re.search(r"\b(busca|contrata|hiring|incorporar|abrir vacante|posici[oó]n|talento)\b.*\b(ai|ia|data|automation|automatizaci[oó]n|machine learning|ml|product manager|cto|head of digital|software|developer|engineer)\b", text):
+        return ("c_level_hire", 25.0)  # tech-hiring relevante para Yacaré
     if re.search(r"\b(lanza|lanzamiento|nuevo producto|expansi[oó]n|expande|abre|adquiere|adquisici[oó]n)\b", text):
         return ("expansion_or_launch", 25.0)
     if re.search(r"\b(alianza|partnership|acuerdo|firma con|joint venture)\b", text):

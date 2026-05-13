@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { scoreCompany } from "@/lib/scoring";
+import { fetchSignalsForCompanyAction } from "./[id]/signals-actions";
 
 /**
  * Agrega una empresa al radar de la org manualmente.
@@ -66,6 +67,14 @@ export async function addToRadarAction(orgSlug: string, companyId: string) {
   });
 
   if (error) return { error: error.message };
+
+  // Auto-fetch signals al entrar al radar (gratis, Google News).
+  // Lo hacemos sin bloquear si falla — el usuario ya tiene su row.
+  try {
+    await fetchSignalsForCompanyAction(orgSlug, companyId);
+  } catch {
+    // silently ignore — los signals se pueden refrescar después manual
+  }
 
   revalidatePath(`/${orgSlug}/companies`);
   revalidatePath(`/${orgSlug}/radar`);

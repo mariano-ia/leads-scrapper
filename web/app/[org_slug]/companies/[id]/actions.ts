@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
+import { fetchSignalsForCompanyAction } from "./signals-actions";
 
 /**
  * Enrich on-demand: dispara Apollo /organizations/enrich + update.
@@ -518,7 +519,23 @@ export async function qualifyCompanyAction(
     steps.push({ name: "enrich", ok: true, detail: "ya estaba (skip)" });
   }
 
-  // 2) Contactos
+  // 2) Signals (gratis, Google News) — autopopulate antes de contactos
+  try {
+    const sg = await fetchSignalsForCompanyAction(orgSlug, companyId);
+    if (sg && !sg.error) {
+      steps.push({
+        name: "signals",
+        ok: true,
+        detail: sg.inserted ? `${sg.inserted} signal${sg.inserted !== 1 ? "s" : ""} nueva${sg.inserted !== 1 ? "s" : ""}` : "sin novedades en Google News",
+      });
+    } else {
+      steps.push({ name: "signals", ok: false, detail: sg?.error || "no se pudo" });
+    }
+  } catch (e: any) {
+    steps.push({ name: "signals", ok: false, detail: e?.message || "error" });
+  }
+
+  // 3) Contactos
   const c = await fetchContactsAction(orgSlug, companyId, { max: opts?.maxContacts ?? 5 });
   if (c?.error) {
     steps.push({ name: "contactos", ok: false, detail: c.error });

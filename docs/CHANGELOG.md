@@ -2,6 +2,68 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 7: Outreach AI + signals auto + scoring visible + sort radar
+
+### Outreach con AI completo
+Nueva tabla `outreach_messages` (migration 0013). 3 server actions:
+- `generateOutreachDraftAction(orgSlug, companyId, contactId)` → Claude Sonnet genera subject+body personalizado usando empresa + contacto + AI brief + signals recientes. Devuelve draft persistido (status='draft').
+- `sendOutreachDraftAction(orgSlug, draftId)` → manda vía Resend desde `leads@yacare.io` con reply-to del usuario actual.
+- `updateOutreachDraftAction(orgSlug, draftId, patch)` → edita subject/body antes de enviar.
+
+UI: nuevo `OutreachButton` en cada contacto con email → expande inline a un editor con asunto + textarea + 3 acciones: **Enviar via Resend** (confirm) · **Abrir en mi cliente de mail** (mailto:) · **Descartar**. Drafts quedan persistidos para auditoría.
+
+System prompt enseña a Mariano: castellano rioplatense, asunto específico (no "Propuesta"), apertura con observación concreta de la empresa, hipótesis de cómo Yacaré le sirve, CTA con propuesta de call 15 min.
+
+### Signals automáticas (gratis, sin tocar nada)
+**Antes**: el usuario tenía que tocar "Buscar signals" empresa por empresa.
+**Ahora**:
+- **Al entrar al radar** (`addToRadarAction`) → fetch Google News inline al final.
+- **Al "Calificar empresa"** (`qualifyCompanyAction`) → step 2 después del enrich, antes de contactos.
+- **Backfill manual ejecutado**: scrape_news --radar-only → 79 signals nuevas (total 295 sobre 88 empresas).
+- **Cron diario** (GitHub Actions) sigue corriendo top-100 growth.
+
+Nueva action `fetchSignalsForCompanyAction(orgSlug, companyId)` reescrita en TS con parser RSS regex (sin dependencia de BS4). Mismo skip de ambiguous names + spam sources + filtro temporal.
+
+### Botón "Buscar signals" en tab Signals
+Reemplaza el copy "Sin signals todavía. Los scrapers no están corriendo" por:
+- Card descriptivo + botón **"Buscar signals"** (gratis) arriba de la lista.
+- Cada signal ahora se renderiza con badge de categoría color-coded + título clickable al artículo + summary + weight badge.
+
+### Score / Fit / Intent visibles en TODOS lados
+
+**Radar (`/radar`)**:
+- Sortable headers: score, fit, intent, status, matched.
+- Columnas dedicadas Fit / Intent (0-100) además del Score combinado.
+- Indicador "🔔 N" cuando hay N signals recientes.
+- Info card al top explicando la fórmula completa.
+- Rescore button (admin) recalcula todo el radar usando data actual.
+
+**Companies (`/companies`)**:
+- Nuevas columnas Score / Fit / Intent que joinean con `org_companies` del org actual.
+- Badge "no radar" para empresas no agregadas.
+- Sigue ordenable por growth_12m/24m, revenue, founded, name, domain.
+
+### Bulk rescore SQL (recompute desde scratch)
+Actualizado para usar fórmula completa en SQL puro (no solo signal_boost):
+- fit = enriched +0.25 · headcount +0.10 · founded +0.20 · revenue +0.15
+- intent = growth tiers (0.40/0.20/0) + intent_strength tiers (0.30/0.15/0.05) + signal_boost (LEAST(0.30, SUM/100))
+- combined = 0.5 × fit + 0.5 × intent
+- **99 rows actualizadas en el radar de Yacaré.**
+
+### Distribución final del radar Yacaré
+```
+🔥 Hot   (≥60): 60 empresas
+🌡 Warm  (40-59): 39 empresas
+❄  Cold  (20-39):  1 empresa
+💀 Dead  (<20):    0 empresas
+```
+
+### Fallback de contactos
+`fetchContactsAction` ahora: si después del filter de title score >= 0.5 no quedan candidatos decisionales, hacemos fallback al top N por has_email (sin filtro). Marca `fallback_used: true` en response. Toast UI muestra warning: "⚠️ sin decisores claros, fallback al staff disponible".
+
+### Categorizador mejorado
+Nuevo regex para detectar tech-hiring (data scientist, AI engineer, automation, head of digital) además de C-level hires.
+
 ## 2026-05-13 · Sesión 6: Botón master "Calificar" + scrapers propios poblando signals
 
 ### Pregunta del usuario

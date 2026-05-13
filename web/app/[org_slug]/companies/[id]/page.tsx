@@ -13,6 +13,8 @@ import { CompanyActions } from "./action-buttons";
 import { NotesPanel } from "@/components/notes-panel";
 import { StatusSelect } from "@/components/status-select";
 import { AddToRadarButton } from "@/components/add-to-radar-button";
+import { FetchSignalsButton } from "./signals-button";
+import { OutreachButton } from "./outreach-button";
 
 export default async function CompanyDetailPage({
   params,
@@ -195,26 +197,57 @@ export default async function CompanyDetailPage({
 
         <TabsContent value="signals">
           <Card>
-            <CardContent className="p-0">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <p className="text-xs text-muted-foreground">
+                  Eventos detectados (Google News + BO Nacional). El scraper diario las actualiza solo, o tocá <span className="text-foreground">Buscar signals</span> para refrescar al toque.
+                </p>
+                <FetchSignalsButton orgSlug={org.slug} companyId={company.id} />
+              </div>
               {signalsRes.data && signalsRes.data.length > 0 ? (
-                <div className="divide-y">
-                  {signalsRes.data.map((s) => (
-                    <div key={s.id} className="p-4 flex justify-between items-start">
-                      <div>
-                        <div className="font-medium text-sm">{s.type} · {s.source}</div>
-                        <div className="text-xs text-muted-foreground">{formatDate(s.occurred_at)}</div>
-                        {s.data && Object.keys(s.data).length > 0 && (
-                          <pre className="mt-1 text-xs bg-muted rounded p-2 overflow-x-auto">{JSON.stringify(s.data, null, 2)}</pre>
-                        )}
+                <div className="divide-y -mx-4">
+                  {signalsRes.data.map((s) => {
+                    const cat = s.data?.category || s.type;
+                    const variantMap: Record<string, "success" | "info" | "warning" | "secondary"> = {
+                      funding_round: "success",
+                      c_level_hire: "success",
+                      expansion_or_launch: "info",
+                      partnership: "info",
+                      press_mention: "secondary",
+                      bo_act: "warning",
+                    };
+                    return (
+                      <div key={s.id} className="p-4 flex justify-between items-start gap-4">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant={variantMap[cat] || "secondary"}>{cat}</Badge>
+                            <span className="text-xs text-muted-foreground">{s.source} · {formatDate(s.occurred_at)}</span>
+                          </div>
+                          {s.data?.title && (
+                            s.data?.url ? (
+                              <a href={s.data.url} target="_blank" rel="noopener" className="text-sm font-medium hover:underline block">
+                                {s.data.title}
+                              </a>
+                            ) : (
+                              <div className="text-sm font-medium">{s.data.title}</div>
+                            )
+                          )}
+                          {s.data?.summary && (
+                            <p className="text-xs text-muted-foreground line-clamp-2">{s.data.summary}</p>
+                          )}
+                        </div>
+                        <Badge variant="outline" className="shrink-0" title="Intent weight contribuido al scoring">
+                          +{Math.round(Number(s.intent_weight))}
+                        </Badge>
                       </div>
-                      <Badge variant="info">weight {s.intent_weight}</Badge>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="p-8 text-center text-sm text-muted-foreground">
-                  Sin signals todavía. Los scrapers (BO, Bumeran, etc) aún no están corriendo en producción.
-                </p>
+                <div className="p-8 text-center text-sm text-muted-foreground space-y-2">
+                  <p>Esta empresa no tiene signals todavía.</p>
+                  <p className="text-xs">Si Google News tiene noticias recientes sobre <span className="font-medium">{company.razon_social}</span>, las traemos al toque.</p>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -261,6 +294,11 @@ export default async function CompanyDetailPage({
                           {c.phone && (
                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                               <Phone className="h-3 w-3" /> {c.phone}
+                            </div>
+                          )}
+                          {c.email && (
+                            <div className="pt-2">
+                              <OutreachButton orgSlug={org.slug} companyId={company.id} contactId={c.id} toEmail={c.email} />
                             </div>
                           )}
                         </div>
