@@ -5,7 +5,7 @@ update_company_with_enrichment: completa los fields que solo da el enrich endpoi
 """
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from supabase import Client
 
@@ -29,6 +29,7 @@ def _account_to_row(account: ApolloAccount) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     return {
         "apollo_id": account.id,
+        "status": "active",  # garantiza re-activar si fue marcada inactive antes
         "razon_social": account.name or f"apollo_{account.id}",
         "dominio": account.primary_domain or account.website_url,
         "website_url": account.website_url,
@@ -77,7 +78,7 @@ async def upsert_company_from_search(
         raise RuntimeError(
             f"upsert_company returned empty for apollo_id {account.id}"
         )
-    return result.data[0]
+    return cast("dict[str, Any]", result.data[0])
 
 
 async def bulk_upsert_companies_from_search(
@@ -133,4 +134,4 @@ async def update_company_with_enrichment(
         .eq("id", company_id)
         .execute()
     )
-    return result.data[0] if result.data else {}
+    return cast("dict[str, Any]", result.data[0]) if result.data else {}

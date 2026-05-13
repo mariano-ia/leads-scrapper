@@ -23,6 +23,7 @@ from leads_scrapper.clients.supabase_client import create_supabase_admin_client
 from leads_scrapper.config import get_settings
 from leads_scrapper.models.apollo import AccountSearchFilters
 from leads_scrapper.repositories.companies_repo import upsert_company_from_search
+from leads_scrapper.utils.industry_filter import matches_target_industries
 from leads_scrapper.utils.logging import get_logger, setup_logging
 
 logger = get_logger("apollo_sync")
@@ -122,7 +123,22 @@ async def run_sync(
 
     apollo = ApolloClient(api_key=settings.apollo_api_key, supabase=supabase)
 
+    # Filtro de industrias derivado de config.industries (lista de nombres).
+    # Apollo no acepta industry filter at-source, así que filtramos por SIC code local.
+    allowed_industries: list[str] | None = None
+    if config.get("industries"):
+        # Normalizar nombres a snake_case keys del mapping
+        allowed_industries = [
+            ind.lower().replace(" ", "_").replace(",", "").replace("&", "and")
+            for ind in config["industries"]
+        ]
+        logger.info(
+            "applying industry filter post-search",
+            extra={"allowed_count": len(allowed_industries)},
+        )
+
     companies_added = 0
+    companies_skipped_industry = 0
     errors: list[dict[str, str]] = []
     pages_processed = 0
 
@@ -131,6 +147,13 @@ async def run_sync(
         current_page = 1
 
         async for account in apollo.search_accounts(filters):
+            # Filtro local por SIC codes
+            if allowed_industries is not None:
+                if not matches_target_industries(
+                    account.sic_codes, allowed_industries=allowed_industries
+                ):
+                    companies_skipped_industry += 1
+                    continue
             accounts_batch.append(account)
             # Trackeamos páginas — ApolloClient pagina internamente, no expone
             # cuándo cruza una página. Por eso usamos batch size = per_page.
@@ -206,6 +229,7 @@ async def run_sync(
         "apollo sync completed",
         extra={
             "companies_added": companies_added,
+            "companies_skipped_industry_filter": companies_skipped_industry,
             "errors": len(errors),
             "dry_run": dry_run,
         },

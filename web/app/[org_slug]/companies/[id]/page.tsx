@@ -84,6 +84,22 @@ export default async function CompanyDetailPage({
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
+          {company.ai_brief && (
+            <Card className="border-blue-200 bg-blue-50/40">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
+                  AI Brief
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm leading-relaxed text-foreground">{company.ai_brief}</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Generado {timeAgo(company.ai_brief_generated_at)} · {company.ai_brief_model || "claude-sonnet"}
+                </p>
+              </CardContent>
+            </Card>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Card className="lg:col-span-2">
               <CardHeader>
