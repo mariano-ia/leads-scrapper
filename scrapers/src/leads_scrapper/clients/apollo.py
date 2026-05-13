@@ -126,12 +126,22 @@ class ApolloClient:
                     "apollo search_accounts request",
                     extra={"page": page, "per_page": filters.per_page},
                 )
-                response = await retry_request(
-                    client,
-                    "POST",
-                    "/mixed_companies/search",
-                    json=body,
-                )
+                try:
+                    response = await retry_request(
+                        client,
+                        "POST",
+                        "/mixed_companies/search",
+                        json=body,
+                    )
+                except httpx.HTTPStatusError as e:
+                    # Apollo Basic limita pagination ~500 páginas con 422 "unprocessable"
+                    if e.response.status_code == 422 and page > 1:
+                        logger.info(
+                            "apollo pagination limit reached, stopping",
+                            extra={"page": page, "status": 422},
+                        )
+                        return
+                    raise
                 payload = response.json()
                 accounts = payload.get("accounts") or payload.get("organizations") or []
                 for raw in accounts:

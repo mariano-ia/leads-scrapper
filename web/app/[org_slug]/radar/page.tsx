@@ -9,12 +9,32 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
 
-export default async function RadarPage({ params }: { params: { org_slug: string } }) {
+const STATUS_FILTERS = ["all", "new", "reviewed", "qualified", "in_pipeline", "disqualified"] as const;
+const STATUS_LABEL: Record<string, string> = {
+  all: "Todas",
+  new: "Nuevas",
+  reviewed: "Revisadas",
+  qualified: "Calificadas",
+  in_pipeline: "En pipeline",
+  disqualified: "Descartadas",
+};
+
+export default async function RadarPage({
+  params,
+  searchParams,
+}: {
+  params: { org_slug: string };
+  searchParams: { status?: string };
+}) {
   const user = await requireAuth();
   const { org } = await requireOrgMembership(params.org_slug, user.id);
   const svc = createSupabaseServiceClient();
 
-  const { data: rows, count } = await svc
+  const statusFilter = STATUS_FILTERS.includes(searchParams.status as any)
+    ? (searchParams.status as (typeof STATUS_FILTERS)[number])
+    : "all";
+
+  let query = svc
     .from("org_companies")
     .select(
       "id, first_matched_at, status, last_combined_score, last_fit_score, last_intent_score, ai_brief, companies(id, razon_social, dominio, sector, headcount_range, location_ciudad, organization_revenue_printed, organization_headcount_twelve_month_growth, intent_strength, ai_brief, linkedin_url)",
@@ -22,15 +42,48 @@ export default async function RadarPage({ params }: { params: { org_slug: string
     )
     .eq("org_id", org.id)
     .order("last_combined_score", { ascending: false, nullsFirst: false })
-    .limit(100);
+    .limit(200);
+  if (statusFilter !== "all") {
+    query = query.eq("status", statusFilter);
+  }
+  const { data: rows, count } = await query;
+
+  // Counts per status for the filter chips
+  const { data: allForCounts } = await svc
+    .from("org_companies")
+    .select("status")
+    .eq("org_id", org.id);
+  const counts: Record<string, number> = { all: allForCounts?.length || 0 };
+  for (const row of allForCounts || []) {
+    const s = row.status as string;
+    counts[s] = (counts[s] || 0) + 1;
+  }
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Radar</h1>
         <p className="text-sm text-muted-foreground">
-          {formatNumber(count)} empresas que matchearon alguna search activa de Yacaré, ordenadas por score combinado
+          {formatNumber(count)} empresa{count !== 1 ? "s" : ""} en {statusFilter === "all" ? "tu radar" : STATUS_LABEL[statusFilter].toLowerCase()}, ordenadas por score combinado
         </p>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {STATUS_FILTERS.map((s) => {
+          const active = s === statusFilter;
+          const href = s === "all" ? `/${org.slug}/radar` : `/${org.slug}/radar?status=${s}`;
+          return (
+            <Link key={s} href={href}>
+              <Button
+                size="sm"
+                variant={active ? "default" : "outline"}
+                className="rounded-full h-7 px-3 text-xs"
+              >
+                {STATUS_LABEL[s]} · {counts[s] || 0}
+              </Button>
+            </Link>
+          );
+        })}
       </div>
 
       <Card>
