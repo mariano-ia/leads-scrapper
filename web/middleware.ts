@@ -6,31 +6,34 @@ const PUBLIC_PATHS = ["/login", "/accept-invite", "/auth", "/_next", "/favicon"]
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
-    return NextResponse.next();
-  }
-
   let response = NextResponse.next({ request });
 
+  // Cliente Supabase que sincroniza cookies sesión request↔response
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name) {
-          return request.cookies.get(name)?.value;
+        getAll() {
+          return request.cookies.getAll();
         },
-        set(name, value, options) {
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name, options) {
-          response.cookies.set({ name, value: "", ...options });
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options)
+          );
         },
       },
     }
   );
 
+  // Esto refresca el JWT si está por expirar y guarda nuevos cookies.
   const { data: { user } } = await supabase.auth.getUser();
+
+  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+    return response;
+  }
 
   if (!user) {
     const url = request.nextUrl.clone();

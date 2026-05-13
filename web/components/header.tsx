@@ -1,6 +1,5 @@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { logoutAction } from "@/app/login/actions";
 import { initials } from "@/lib/utils";
 import { LogOut } from "lucide-react";
 
@@ -24,7 +23,7 @@ export function Header({ userEmail, orgName, role }: HeaderProps) {
         <Avatar className="h-8 w-8">
           <AvatarFallback>{initials(userEmail)}</AvatarFallback>
         </Avatar>
-        <form action={logoutAction}>
+        <form action="/api/auth/logout" method="POST">
           <Button variant="ghost" size="icon" type="submit" title="Cerrar sesión">
             <LogOut className="h-4 w-4" />
           </Button>
