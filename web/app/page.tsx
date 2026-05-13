@@ -1,10 +1,22 @@
-export default function HomePage() {
-  return (
-    <main className="flex min-h-screen items-center justify-center p-8">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">Leads Scrapper</h1>
-        <p className="text-gray-600">Yacaré · Fase 0 en construcción</p>
-      </div>
-    </main>
-  );
+import { redirect } from "next/navigation";
+import { getCurrentUser, getUserOrgs, isSuperAdmin } from "@/lib/auth";
+
+export default async function RootPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const orgs = await getUserOrgs(user.id);
+
+  if (orgs.length === 0) {
+    const superAdmin = await isSuperAdmin(user.id);
+    if (superAdmin) redirect("/admin/orgs");
+    redirect("/select-org");
+  }
+
+  if (orgs.length === 1) {
+    // @ts-expect-error orgs is shaped with nested orgs field
+    redirect(`/${orgs[0].orgs.slug}/dashboard`);
+  }
+
+  redirect("/select-org");
 }
