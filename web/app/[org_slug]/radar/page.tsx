@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { StatusSelect } from "@/components/status-select";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
@@ -91,7 +92,7 @@ export default async function RadarPage({ params }: { params: { org_slug: string
                     )}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={r.status} />
+                    <StatusSelect orgSlug={org.slug} orgCompanyId={r.id} current={r.status as any} />
                   </TableCell>
                   <TableCell className="text-muted-foreground text-xs">{timeAgo(r.first_matched_at)}</TableCell>
                   <TableCell className="text-right">

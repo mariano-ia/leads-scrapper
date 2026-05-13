@@ -10,6 +10,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 import { formatPercent, formatDate, timeAgo } from "@/lib/utils";
 import { CompanyActions } from "./action-buttons";
+import { NotesPanel } from "@/components/notes-panel";
+import { StatusSelect } from "@/components/status-select";
 
 export default async function CompanyDetailPage({
   params,
@@ -20,13 +22,29 @@ export default async function CompanyDetailPage({
   const { org } = await requireOrgMembership(params.org_slug, user.id);
   const svc = createSupabaseServiceClient();
 
-  const [companyRes, contactsRes, signalsRes, orgCompanyRes, notesRes] = await Promise.all([
+  const [companyRes, contactsRes, signalsRes, orgCompanyRes] = await Promise.all([
     svc.from("companies").select("*").eq("id", params.id).single(),
     svc.from("company_contacts").select("*").eq("company_id", params.id),
     svc.from("signals").select("*").eq("company_id", params.id).order("occurred_at", { ascending: false }).limit(50),
     svc.from("org_companies").select("*").eq("org_id", org.id).eq("company_id", params.id).maybeSingle(),
-    svc.from("org_company_notes").select("*, author_user_id").order("created_at", { ascending: false }),
   ]);
+
+  // Notes scoped a esta org_company si existe
+  let notesData: any[] = [];
+  if (orgCompanyRes.data) {
+    const { data: notes } = await svc
+      .from("org_company_notes")
+      .select("id, content, created_at, author_user_id")
+      .eq("org_company_id", orgCompanyRes.data.id)
+      .order("created_at", { ascending: false });
+    if (notes && notes.length > 0) {
+      // Resolve author emails
+      const userIds = Array.from(new Set(notes.map((n) => n.author_user_id)));
+      const { data: usersList } = await svc.auth.admin.listUsers();
+      const emailById = new Map((usersList?.users || []).map((u) => [u.id, u.email]));
+      notesData = notes.map((n) => ({ ...n, author_email: emailById.get(n.author_user_id) || "?" }));
+    }
+  }
 
   const company = companyRes.data;
   if (!company) notFound();
@@ -71,7 +89,10 @@ export default async function CompanyDetailPage({
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {orgCompanyRes.data && (
+            <StatusSelect orgSlug={org.slug} orgCompanyId={orgCompanyRes.data.id} current={orgCompanyRes.data.status as any} />
+          )}
           {company.intent_strength && <Badge variant="warning">intent: {company.intent_strength}</Badge>}
           {company.founded_year && <Badge variant="outline">fundada {company.founded_year}</Badge>}
         </div>
@@ -219,11 +240,16 @@ export default async function CompanyDetailPage({
         </TabsContent>
 
         <TabsContent value="notes">
-          <Card>
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              Notas y timeline de ownership: próximamente.
-            </CardContent>
-          </Card>
+          {orgCompanyRes.data ? (
+            <NotesPanel orgSlug={org.slug} companyId={company.id} initialNotes={notesData} />
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-sm text-muted-foreground">
+                Esta empresa no está en el radar de tu org todavía. Para agregar notas, primero tiene
+                que matchear una search activa.
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
 
