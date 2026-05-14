@@ -115,6 +115,22 @@ def _categorize_news(title: str, summary: str) -> tuple[str, float]:
     return ("press_mention", 10.0)
 
 
+def _build_hiring_query(razon_social: str) -> str:
+    """Query secundaria: noticias de hiring/contrataciones mencionando a la empresa.
+
+    Más laxa que la query principal — no exige intitle, pero exige presencia de
+    keywords de hiring en el título Y la razón social entre comillas.
+    """
+    rs_clean = _clean_razon_social(razon_social)
+    hiring_kws = (
+        '("contrata" OR "busca" OR "incorpora" OR "designa" OR "nombra" OR '
+        '"hiring" OR "head of digital" OR "head of data" OR "head of ai" OR '
+        '"nuevo CTO" OR "nueva CTO" OR "nuevo CEO" OR "Chief Technology" OR '
+        '"data scientist" OR "AI engineer" OR "machine learning")'
+    )
+    return f'"{rs_clean}" {hiring_kws}'
+
+
 async def fetch_news_for_company(
     client: httpx.AsyncClient,
     razon_social: str,
@@ -123,8 +139,16 @@ async def fetch_news_for_company(
     lang: str = "es-419",
     country: str = "AR",
     max_items: int = 5,
+    include_hiring: bool = True,
 ) -> list[dict[str, Any]]:
-    """Devuelve items recientes desde Google News RSS para esta empresa."""
+    """Devuelve items recientes desde Google News RSS para esta empresa.
+
+    Hace 2 queries:
+    1. intitle:"<RS>" → noticias generales donde la RS está en el título.
+    2. (opcional) "<RS>" + keywords de hiring → news de contrataciones/búsquedas.
+
+    Dedup por URL. Combina ambas listas hasta `max_items`.
+    """
     # Skip empresas con nombre ambiguo (solo 1 palabra común) sin dominio que ancle.
     rs_clean = _clean_razon_social(razon_social).lower()
     if rs_clean in COMMON_AMBIGUOUS_NAMES and not dominio:
@@ -136,60 +160,88 @@ async def fetch_news_for_company(
         logger.info("skip ambiguous name", extra={"razon_social": razon_social, "dominio": dominio})
         return []
 
-    query = _build_query(razon_social, dominio)
-    params = {"q": query, "hl": lang, "gl": country, "ceid": f"{country}:{lang.split('-')[0]}"}
-    url = f"{GOOGLE_NEWS_RSS}?{httpx.QueryParams(params)}"
     age_cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
-    try:
-        response = await client.get(url, timeout=20)
-        response.raise_for_status()
-    except Exception as e:
-        logger.warning("google news fetch failed", extra={"razon_social": razon_social, "err": str(e)})
-        return []
 
-    soup = BeautifulSoup(response.text, "xml")
+    async def _fetch_query(query: str, strict_title_match: bool) -> list[dict[str, Any]]:
+        """Fetch + parse de una query Google News. strict_title_match=True exige
+        que el RS aparezca como palabra completa en el título."""
+        params = {"q": query, "hl": lang, "gl": country, "ceid": f"{country}:{lang.split('-')[0]}"}
+        url = f"{GOOGLE_NEWS_RSS}?{httpx.QueryParams(params)}"
+        try:
+            response = await client.get(url, timeout=20)
+            response.raise_for_status()
+        except Exception as e:
+            logger.warning("google news fetch failed", extra={"razon_social": razon_social, "err": str(e)})
+            return []
+        out: list[dict[str, Any]] = []
+        soup = BeautifulSoup(response.text, "xml")
+        for raw_item in soup.find_all("item"):
+            title_el = raw_item.find("title")
+            link_el = raw_item.find("link")
+            pub_el = raw_item.find("pubDate")
+            desc_el = raw_item.find("description")
+            source_el = raw_item.find("source")
+            if not title_el or not link_el:
+                continue
+            title = title_el.get_text(strip=True)
+            if strict_title_match and not _matches_company(title, razon_social):
+                continue
+            source_name = source_el.get_text(strip=True) if source_el else "google_news"
+            if source_name in SPAM_SOURCES:
+                continue
+            link = link_el.get_text(strip=True)
+            summary_html = desc_el.get_text(strip=True) if desc_el else ""
+            summary = BeautifulSoup(summary_html, "lxml").get_text(" ", strip=True) if summary_html else ""
+            # Para la query laxa (no strict), exigimos que RS aparezca en title OR summary
+            if not strict_title_match:
+                combo = f"{title} {summary}".lower()
+                rs_low = _clean_razon_social(razon_social).lower()
+                if rs_low not in combo:
+                    continue
+            try:
+                occurred_at = parsedate_to_datetime(pub_el.get_text(strip=True)).astimezone(timezone.utc) if pub_el else datetime.now(timezone.utc)
+            except Exception:
+                occurred_at = datetime.now(timezone.utc)
+            if occurred_at < age_cutoff:
+                continue
+            category, weight = _categorize_news(title, summary)
+            out.append({
+                "title": title,
+                "url": link,
+                "summary": summary[:500],
+                "occurred_at": occurred_at.isoformat(),
+                "source_name": source_name,
+                "category": category,
+                "intent_weight": weight,
+            })
+        return out
+
+    # Query 1 (estricta): intitle
+    primary = await _fetch_query(_build_query(razon_social, dominio), strict_title_match=True)
+    # Query 2 (hiring, opcional)
+    hiring: list[dict[str, Any]] = []
+    if include_hiring:
+        hiring = await _fetch_query(_build_hiring_query(razon_social), strict_title_match=False)
+
+    # Combinar + dedup por URL, primary tiene prioridad
+    seen_urls = set()
     items: list[dict[str, Any]] = []
-    for raw_item in soup.find_all("item"):
+    for it in primary + hiring:
+        if it["url"] in seen_urls:
+            continue
+        seen_urls.add(it["url"])
+        items.append(it)
         if len(items) >= max_items:
             break
-        title_el = raw_item.find("title")
-        link_el = raw_item.find("link")
-        pub_el = raw_item.find("pubDate")
-        desc_el = raw_item.find("description")
-        source_el = raw_item.find("source")
-        if not title_el or not link_el:
-            continue
-        title = title_el.get_text(strip=True)
-        # Defensa anti-ruido: si el título no contiene la RS como token, descartar.
-        if not _matches_company(title, razon_social):
-            continue
-        source_name = source_el.get_text(strip=True) if source_el else "google_news"
-        if source_name in SPAM_SOURCES:
-            continue
-        link = link_el.get_text(strip=True)
-        summary_html = desc_el.get_text(strip=True) if desc_el else ""
-        # description suele ser HTML con texto plano embebido
-        summary = BeautifulSoup(summary_html, "lxml").get_text(" ", strip=True) if summary_html else ""
-        try:
-            occurred_at = parsedate_to_datetime(pub_el.get_text(strip=True)).astimezone(timezone.utc) if pub_el else datetime.now(timezone.utc)
-        except Exception:
-            occurred_at = datetime.now(timezone.utc)
-        # Filtrar noticias viejas — relevancia decae rápido
-        if occurred_at < age_cutoff:
-            continue
-        category, weight = _categorize_news(title, summary)
-        items.append({
-            "title": title,
-            "url": link,
-            "summary": summary[:500],
-            "occurred_at": occurred_at.isoformat(),
-            "source_name": source_name,
-            "category": category,
-            "intent_weight": weight,
-        })
+
     logger.info(
         "google news fetched",
-        extra={"razon_social": razon_social, "items": len(items)},
+        extra={
+            "razon_social": razon_social,
+            "items": len(items),
+            "primary": len(primary),
+            "hiring": len(hiring),
+        },
     )
     return items
 

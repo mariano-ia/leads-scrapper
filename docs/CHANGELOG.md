@@ -2,6 +2,44 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-13 · Sesión 8: Auto-rescore SQL + filtros companies + Resend webhook + 2da query news
+
+### Auto-rescore tras cada cambio (trigger SQL, migration 0014)
+Antes: tras un signal nuevo o un enrich, había que tocar el botón "Rescore" manualmente.
+Ahora: 3 triggers PostgreSQL recomputan automáticamente fit/intent/combined:
+- **AFTER INSERT ON signals** → rescore de las org_companies de esa company.
+- **AFTER DELETE ON signals** → rescore (los scores bajan cuando se borra una señal).
+- **AFTER UPDATE ON companies** → rescore si cambió sector/headcount/founded/revenue/growth/intent_strength.
+
+Smoke test: insert de un signal weight=40 en Oleana Jewelry → intent 0.40 → 0.70, combined 0.55 → 0.70 al instante. Delete → vuelve a 0.40 / 0.55.
+
+Función plpgsql `rescore_org_companies_for_company(p_company_id)` reutilizable, idempotente, mismo cálculo que el bulk SQL del rescore manual.
+
+### Filtros completos en /companies
+Nuevos query params: `sector · city · headcount · radar (yes/no) · enriched (yes/no) · has_brief · intent · growth_min · revenue_min`. Todos combinables.
+
+UI: 2 filas de controles bajo el search bar:
+- Fila 1: search libre · sector · ciudad · dropdown headcount.
+- Fila 2: dropdowns radar/enriched + checkboxes (con AI brief / con intent) + Growth ≥ % / Revenue ≥ USD + Aplicar / Limpiar.
+
+Ejemplos de uso:
+- `?radar=no&enriched=yes&growth_min=20` → empresas enriched que crecen más de 20% pero todavía no están en radar.
+- `?sector=software&city=Buenos+Aires&has_brief=yes` → software de CABA con AI brief listo.
+
+### Resend webhook → tracking real de outreach
+Endpoint nuevo `/api/resend/webhook` que recibe eventos de Resend (delivered/bounced/complained/failed/opened/clicked) y actualiza `outreach_messages.status` + cuenta opens/clicks en `context_data`. Autenticación via header `X-Resend-Webhook-Secret` (env `RESEND_WEBHOOK_SECRET`).
+
+Para activarlo: configurar webhook en https://resend.com/webhooks apuntando a `https://<vercel-domain>/api/resend/webhook` con el secret.
+
+### Hiring query secundaria en Google News
+Skipeo de Bumeran/Indeed/LinkedIn jobs (403 + bot-detection). Alternativa: segunda query Google News por empresa con keywords de hiring (contrata / busca / incorpora / designa / nombra / head of digital / nuevo CTO / data scientist / AI engineer / ML).
+
+`fetch_news_for_company` ahora hace 2 fetches paralelos:
+1. Estricta: `intitle:"<RS>"` (anti-ruido).
+2. Laxa con hiring keywords: `"<RS>" (contrata OR busca OR ...)` — exige RS en title o summary.
+
+Combina + dedup por URL. Smoke test con Globant: 8 items (vs 5 antes) incluyendo algunas categorizadas como `c_level_hire`. MiradorTEC: 8 items, 2 funding_round detectados.
+
 ## 2026-05-13 · Sesión 7: Outreach AI + signals auto + scoring visible + sort radar
 
 ### Outreach con AI completo

@@ -26,8 +26,24 @@ export default async function CompaniesPage({
   params,
   searchParams,
 }: {
-  params: { org_slug: string };
-  searchParams: { q?: string; page?: string; sort?: string; order?: string };
+  params: {
+    org_slug: string;
+  };
+  searchParams: {
+    q?: string;
+    page?: string;
+    sort?: string;
+    order?: string;
+    sector?: string;
+    city?: string;
+    headcount?: string;
+    radar?: "yes" | "no";
+    enriched?: "yes" | "no";
+    has_brief?: "yes";
+    intent?: "any";
+    growth_min?: string;
+    revenue_min?: string;
+  };
 }) {
   const user = await requireAuth();
   const { org } = await requireOrgMembership(params.org_slug, user.id);
@@ -40,6 +56,23 @@ export default async function CompaniesPage({
   const sortColumn = SORT_MAP[sortKey];
   const offset = (page - 1) * PAGE_SIZE;
 
+  const sectorFilter = (searchParams.sector || "").trim();
+  const cityFilter = (searchParams.city || "").trim();
+  const headcountFilter = (searchParams.headcount || "").trim();
+  const radarFilter = searchParams.radar === "yes" ? "yes" : searchParams.radar === "no" ? "no" : null;
+  const enrichedFilter = searchParams.enriched === "yes" ? "yes" : searchParams.enriched === "no" ? "no" : null;
+  const briefFilter = searchParams.has_brief === "yes";
+  const intentFilter = searchParams.intent === "any";
+  const growthMin = searchParams.growth_min ? Number(searchParams.growth_min) / 100 : null;
+  const revenueMin = searchParams.revenue_min ? Number(searchParams.revenue_min) : null;
+
+  // Si el filtro radar=yes/no requiere un pre-fetch de IDs en el radar
+  let radarIds: string[] | null = null;
+  if (radarFilter) {
+    const { data: radarRows } = await svc.from("org_companies").select("company_id").eq("org_id", org.id);
+    radarIds = (radarRows || []).map((r) => r.company_id as string);
+  }
+
   let query = svc
     .from("companies")
     .select(
@@ -50,8 +83,27 @@ export default async function CompaniesPage({
     .order(sortColumn, { ascending: order === "asc", nullsFirst: false })
     .range(offset, offset + PAGE_SIZE - 1);
 
-  if (q) {
-    query = query.ilike("razon_social", `%${q}%`);
+  if (q) query = query.ilike("razon_social", `%${q}%`);
+  if (sectorFilter) query = query.ilike("sector", `%${sectorFilter}%`);
+  if (cityFilter) query = query.ilike("location_ciudad", `%${cityFilter}%`);
+  if (headcountFilter) query = query.eq("headcount_range", headcountFilter);
+  if (enrichedFilter === "yes") query = query.not("sector", "is", null);
+  if (enrichedFilter === "no") query = query.is("sector", null);
+  if (briefFilter) query = query.not("ai_brief", "is", null);
+  if (intentFilter) query = query.not("intent_strength", "is", null);
+  if (growthMin != null && !isNaN(growthMin)) {
+    query = query.gte("organization_headcount_twelve_month_growth", growthMin);
+  }
+  if (revenueMin != null && !isNaN(revenueMin)) {
+    query = query.gte("organization_revenue", revenueMin);
+  }
+  if (radarFilter === "yes" && radarIds && radarIds.length > 0) {
+    query = query.in("id", radarIds);
+  } else if (radarFilter === "yes" && (!radarIds || radarIds.length === 0)) {
+    // Empty radar → no results
+    query = query.eq("id", "00000000-0000-0000-0000-000000000000");
+  } else if (radarFilter === "no" && radarIds && radarIds.length > 0) {
+    query = query.not("id", "in", `(${radarIds.join(",")})`);
   }
 
   const { data: companies, count } = await query;
@@ -79,8 +131,21 @@ export default async function CompaniesPage({
   }
 
   const basePath = `/${org.slug}/companies`;
-  const preservedParams = { q: q || undefined, page: searchParams.page };
-  const pageParams = { q: q || undefined, sort: sortKey, order };
+  const filterParams = {
+    sector: sectorFilter || undefined,
+    city: cityFilter || undefined,
+    headcount: headcountFilter || undefined,
+    radar: radarFilter || undefined,
+    enriched: enrichedFilter || undefined,
+    has_brief: briefFilter ? "yes" : undefined,
+    intent: intentFilter ? "any" : undefined,
+    growth_min: searchParams.growth_min || undefined,
+    revenue_min: searchParams.revenue_min || undefined,
+  };
+  const preservedParams = { q: q || undefined, page: searchParams.page, ...filterParams };
+  const pageParams = { q: q || undefined, sort: sortKey, order, ...filterParams };
+
+  const hasActiveFilters = Object.values(filterParams).some((v) => v);
 
   return (
     <div className="space-y-4">
@@ -110,17 +175,51 @@ export default async function CompaniesPage({
         </div>
       </Card>
 
-      <form className="flex gap-2 items-center">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input name="q" defaultValue={q} placeholder="Buscar por razón social..." className="pl-8" />
+      <form className="space-y-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input name="q" defaultValue={q} placeholder="Buscar por razón social..." className="pl-8" />
+          </div>
+          <Input name="sector" defaultValue={sectorFilter} placeholder="Sector" className="w-40" />
+          <Input name="city" defaultValue={cityFilter} placeholder="Ciudad" className="w-40" />
+          <select name="headcount" defaultValue={headcountFilter} className="h-9 px-2 text-sm border rounded-md bg-background">
+            <option value="">Cualquier tamaño</option>
+            <option value="1,10">1-10</option>
+            <option value="11,20">11-20</option>
+            <option value="21,50">21-50</option>
+            <option value="51,100">51-100</option>
+            <option value="101,200">101-200</option>
+            <option value="201,500">201-500</option>
+            <option value="501,1000">501-1000</option>
+          </select>
         </div>
-        <Button type="submit" variant="outline">Buscar</Button>
-        {q && (
-          <Link href={`/${org.slug}/companies`}>
-            <Button type="button" variant="ghost">Limpiar</Button>
-          </Link>
-        )}
+        <div className="flex gap-2 items-center flex-wrap text-sm">
+          <select name="radar" defaultValue={radarFilter || ""} className="h-9 px-2 text-sm border rounded-md bg-background">
+            <option value="">Radar (todas)</option>
+            <option value="yes">En el radar</option>
+            <option value="no">Fuera del radar</option>
+          </select>
+          <select name="enriched" defaultValue={enrichedFilter || ""} className="h-9 px-2 text-sm border rounded-md bg-background">
+            <option value="">Enrich (todas)</option>
+            <option value="yes">Enriched</option>
+            <option value="no">Sin enrich</option>
+          </select>
+          <label className="flex items-center gap-1 text-xs">
+            <input type="checkbox" name="has_brief" value="yes" defaultChecked={briefFilter} /> Con AI brief
+          </label>
+          <label className="flex items-center gap-1 text-xs">
+            <input type="checkbox" name="intent" value="any" defaultChecked={intentFilter} /> Con intent activo
+          </label>
+          <Input name="growth_min" type="number" step="1" placeholder="Growth ≥ %" defaultValue={searchParams.growth_min || ""} className="w-28" />
+          <Input name="revenue_min" type="number" step="100000" placeholder="Revenue ≥ USD" defaultValue={searchParams.revenue_min || ""} className="w-36" />
+          <Button type="submit" variant="outline" size="sm">Aplicar</Button>
+          {(q || hasActiveFilters) && (
+            <Link href={`/${org.slug}/companies`}>
+              <Button type="button" variant="ghost" size="sm">Limpiar</Button>
+            </Link>
+          )}
+        </div>
       </form>
 
       <Card>
