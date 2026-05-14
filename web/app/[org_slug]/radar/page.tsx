@@ -10,7 +10,7 @@ import { SortableHeader } from "@/components/sortable-header";
 import { RescoreButton } from "./rescore-button";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
-import { resolveUserEmails } from "@/lib/user-emails";
+import { resolveUserDisplays } from "@/lib/user-emails";
 import { formatNumber, formatPercent, formatRevenue, timeAgo } from "@/lib/utils";
 
 const STATUS_FILTERS = ["all", "new", "reviewed", "qualified", "in_pipeline", "disqualified"] as const;
@@ -102,11 +102,15 @@ export default async function RadarPage({
     .select("user_id")
     .eq("org_id", org.id);
   const memberUserIds = (memberRows || []).map((m) => m.user_id);
-  const emailMap = await resolveUserEmails(memberUserIds);
-  const members = memberUserIds.map((id) => ({
-    user_id: id,
-    email: emailMap.get(id) || id,
-  }));
+  const displayMap = await resolveUserDisplays(memberUserIds);
+  const members = memberUserIds.map((id) => {
+    const d = displayMap.get(id);
+    return {
+      user_id: id,
+      email: d?.email || "",
+      name: d?.name || null,
+    };
+  });
 
   return (
     <div className="space-y-4">

@@ -2,6 +2,33 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-14 · Sesión 11: Display names + invitaciones + editor Master Universe
+
+### Display names
+- Nuevo helper `lib/user-emails.ts` con cache compartido (5min TTL).
+- `resolveUserDisplays(userIds)` devuelve `{email, name}` por user (lee `user_metadata.full_name`).
+- `OwnerSelect` ahora muestra nombre si existe, fallback a email, fallback final a "usuario {short-id}". Ya no se ve UUID crudo.
+- `/settings` con form para editar tu display name (auth.users.user_metadata.full_name).
+- Cache invalidation tras update: `invalidateUserEmailsCache()`.
+- Migration 0020: columna `notes` en `universe_master_versions`.
+
+### Invitaciones desde `/members`
+- `InviteForm` (admin-only): email + rol + botón "Invitar".
+- `createInvitationAction`: genera token random + insert en `invitations` + manda email vía Resend con link `/invitations/[token]` que expira en 7 días.
+- Skip si el email ya es miembro o si hay invitación pendiente vigente.
+- Página `/invitations/[token]`: 4 estados (válida / aceptada / expirada / inválida) + check de email matching antes de aceptar.
+- `acceptInvitationAction`: idempotente, inserta en `org_members` y marca `accepted_at`.
+- `CancelInvitationButton` para admins.
+
+### Editor Master Universe
+- `/admin/universe` ahora tiene form completo: país, headcount min/max, founded year min, max companies target, industries (incluidas / excluidas), keywords any, notas.
+- `publishUniverseVersionAction`: deactiva activa + crea nueva versión incremental (patrón inmutable, rollback fácil).
+- `rollbackUniverseVersionAction`: super-admin puede restaurar cualquier versión histórica.
+- Botones "Restaurar" en cada row del historial.
+
+### Bug fix radar fantasma
+- `createSearchAction` ya NO mete 500 empresas al radar al crear search. Era el responsable de las 100 empresas que aparecían sin que el usuario las agregara.
+
 ## 2026-05-14 · Sesión 10: Recortes de costos aprobados
 
 Tras el informe de costos, aplicación de 6 ahorros confirmados por usuario.

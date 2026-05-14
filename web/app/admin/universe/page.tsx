@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { formatDate, formatNumber, timeAgo } from "@/lib/utils";
+import { UniverseEditForm, RollbackButton } from "./edit-form";
 
 export default async function AdminUniversePage() {
   const svc = createSupabaseServiceClient();
@@ -65,22 +66,36 @@ export default async function AdminUniversePage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Historial de versiones</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          {history.data?.map((v) => (
-            <div key={v.id} className="flex justify-between py-1 border-b last:border-0">
-              <span className="font-mono text-xs">v{v.version_int}</span>
-              <span className="text-muted-foreground">
-                {v.is_active ? <Badge variant="success">activa</Badge> : <span>{formatDate(v.activated_at)} → {formatDate(v.deactivated_at)}</span>}
-              </span>
-            </div>
-          ))}
+        <CardHeader>
+          <CardTitle>Editar (publica nueva versión)</CardTitle>
+          <CardDescription>
+            Cada cambio crea una versión nueva e inmutable. La anterior queda en historial — podés restaurarla cuando quieras.
+            Cambios aplican al próximo Apollo sync (no rehace data existente).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <UniverseEditForm currentConfig={config} />
         </CardContent>
       </Card>
 
-      <Card className="border-blue-200 bg-blue-50/40">
-        <CardContent className="p-4 text-sm">
-          <strong>Próximo:</strong> editor de config con preview antes de aplicar ("X empresas matchearían"), + botón para disparar sync inmediato.
+      <Card>
+        <CardHeader><CardTitle>Historial de versiones</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {history.data?.map((v) => (
+            <div key={v.id} className="flex justify-between items-center py-1 border-b last:border-0 gap-2">
+              <span className="font-mono text-xs">v{v.version_int}</span>
+              <span className="text-muted-foreground flex items-center gap-2">
+                {v.is_active ? (
+                  <Badge variant="success">activa</Badge>
+                ) : (
+                  <>
+                    <span>{formatDate(v.activated_at)} → {formatDate(v.deactivated_at)}</span>
+                    <RollbackButton versionId={v.id} versionInt={v.version_int} />
+                  </>
+                )}
+              </span>
+            </div>
+          ))}
         </CardContent>
       </Card>
     </div>
