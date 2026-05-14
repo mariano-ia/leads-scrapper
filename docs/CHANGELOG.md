@@ -2,6 +2,49 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-14 · Sesión 10: Recortes de costos aprobados
+
+Tras el informe de costos, aplicación de 6 ahorros confirmados por usuario.
+**Ahorro estimado: $15-20/mes (-30% sobre run-rate Anthropic).**
+
+### Cooldown enrich 7 días (era 30)
+- `enrichCompanyAction`: skip si `last_apollo_sync_at < 7 días`.
+- Toast en UI: "Ya enriquecida hace N días. Podés volver a enriquecer en M días."
+- Decisión user: 30 días era demasiado conservador; 7 alcanza para evitar dobles clics + permite refrescar empresas tras eventos importantes.
+
+### max_tokens reducidos
+- Brief (web action + Python batch + Python sync): 400 → **250**.
+- Outreach email: 1500 → **600**.
+- Reduces ~30% output tokens. Ahorro ~$3-5/mes.
+
+### Anthropic Batch API en workflow nuevo
+- `.github/workflows/nightly_briefs_batch.yml`: corre diario 4 UTC (1am AR) usando `generate_briefs_batch.py` (50% más barato que sync).
+- Header beta: `message-batches-2024-09-24`.
+- Default limit=100 briefs/noche.
+- El job sync original `generate_briefs.py` queda como fallback on-demand.
+
+### Cron scrape_news: 6x → 3x/semana
+- `daily_scrape.yml` cron pasa de `0 9 * * 1-6` a `0 9 * * 1,3,5` (lunes/miércoles/viernes).
+- Las empresas top-growth no cambian día a día → 3x/semana es suficiente.
+- Reduce ~50% el consumo de minutos en GitHub Actions (sin costo hoy, pero margen para escalar).
+
+### enrich_pending.py marcado deprecado para cron
+- Doc en cabecera: NO debe correrse desde Actions. Estrategia post-auditoría es enrich on-demand vía `addToRadarAction` / `qualifyCompanyAction`.
+- Queda disponible para backfills manuales puntuales.
+
+### Prompt caching real (mover catálogo Yacaré al system)
+**El cambio más importante para calidad + costo de los briefs.**
+
+- Nuevo `web/lib/prompts/brief-system.ts` con system prompt extendido (~1.4K tokens):
+  - Catálogo de 4 verticales Yacaré (rediseño web, integraciones IA, automatización, MVPs) con tickets típicos y cuándo aplican.
+  - Heurísticas para elegir vertical (growth, sector, tech stack, signals).
+  - 3 ejemplos few-shot completos (empresa + brief), incluyendo caso de datos faltantes.
+- Mismo prompt extendido en `scrapers/.../anthropic_client.py` (`BRIEF_SYSTEM_PROMPT`).
+- Batch job lo importa y lo usa también.
+- Aplicado `cache_control: { type: 'ephemeral' }` en system block + header `anthropic-beta: prompt-caching-2024-07-31`.
+- En cache hit (90% del tiempo dentro de TTL 5min), input tokens cacheados pagan 10% del precio normal.
+- Beneficio adicional: briefs ahora referencian verticales Yacaré específicos en lugar de pitchs genéricos.
+
 ## 2026-05-14 · Sesión 9: Remediación completa de auditoría (74 findings)
 
 ### Seguridad — críticos resueltos

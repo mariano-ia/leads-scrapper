@@ -21,12 +21,12 @@ Invocación:
 import argparse
 import asyncio
 import sys
-import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
+from leads_scrapper.clients.anthropic_client import BRIEF_SYSTEM_PROMPT
 from leads_scrapper.clients.supabase_client import create_supabase_admin_client
 from leads_scrapper.config import get_settings
 from leads_scrapper.utils.logging import get_logger, setup_logging
@@ -35,17 +35,7 @@ logger = get_logger("generate_briefs_batch")
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages/batches"
 
-SYSTEM_PROMPT = (
-    "Sos un analista B2B que escribe briefs ejecutivos sobre empresas argentinas "
-    "para un equipo de ventas de Yacaré (estudio de diseño y desarrollo digital "
-    "con foco en IA para PYMEs).\n\n"
-    "Cada brief tiene exactamente 4 oraciones cortas, 80-130 palabras totales:\n"
-    "1. Qué hace la empresa (industria, tamaño, modelo)\n"
-    "2. Por qué está en el radar (crecimiento, señales recientes, financiera)\n"
-    "3. Por qué Yacaré podría serle útil (pitch específico, no genérico)\n"
-    "4. Riesgo o caveat (estado actual, competencia, momento del ciclo)\n\n"
-    "Tono: directo, sin marketing-speak. Castellano rioplatense neutro."
-)
+SYSTEM_PROMPT = BRIEF_SYSTEM_PROMPT
 
 
 def _build_user_prompt(c: dict[str, Any]) -> str:
@@ -69,8 +59,8 @@ def _build_user_prompt(c: dict[str, Any]) -> str:
     )
 
 
-async def submit_batch(client: httpx.AsyncClient, api_key: str, model: str, requests: list[dict]) -> str:
-    """Submit batch a Anthropic, devuelve batch_id."""
+async def submit_batch(client: httpx.AsyncClient, api_key: str, requests: list[dict]) -> str:
+    """Submit batch a Anthropic, devuelve batch_id. model va en cada request."""
     body = {"requests": requests}
     resp = await client.post(
         ANTHROPIC_API_URL,
@@ -163,21 +153,32 @@ async def run(*, limit: int = 50, poll_interval: int = 30) -> int:
 
     logger.info("submitting batch", extra={"n_candidates": len(candidates), "model": settings.anthropic_model})
 
+    # supabase-py devuelve Sequence[JSON]; narrowing manual a list[dict].
+    typed_candidates = cast(list[dict[str, Any]], candidates)
     requests = [
         {
             "custom_id": c["id"],
             "params": {
                 "model": settings.anthropic_model,
-                "max_tokens": 400,
-                "system": SYSTEM_PROMPT,
+                "max_tokens": 250,
+                # System extendido con cache_control: 90% off en tokens de input cacheados.
+                # Compartido entre web y batch — comparten cache si pegan al mismo
+                # endpoint dentro de los 5min TTL.
+                "system": [
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 "messages": [{"role": "user", "content": _build_user_prompt(c)}],
             },
         }
-        for c in candidates
+        for c in typed_candidates
     ]
 
     async with httpx.AsyncClient() as client:
-        batch_id = await submit_batch(client, settings.anthropic_api_key, settings.anthropic_model, requests)
+        batch_id = await submit_batch(client, settings.anthropic_api_key, requests)
         logger.info("batch submitted", extra={"batch_id": batch_id})
 
         ended = await poll_batch(client, settings.anthropic_api_key, batch_id, poll_interval)

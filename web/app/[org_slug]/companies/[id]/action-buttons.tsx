@@ -46,6 +46,7 @@ export function CompanyActions({
     startEnrich(async () => {
       const result = await enrichCompanyAction(orgSlug, companyId);
       if (result?.error) toast.error(result.error);
+      else if (result?.skipped) toast.message(result.reason || "Enrich saltado · ya está fresca");
       else toast.success("Enrich aplicado · 1 cred Apollo");
     });
   }

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
+import { BRIEF_SYSTEM_PROMPT } from "@/lib/prompts/brief-system";
 import { fetchSignalsForCompanyAction } from "./signals-actions";
 
 /**
@@ -31,15 +32,16 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
   if (!company) return { error: "Empresa no encontrada" };
   if (!company.dominio) return { error: "Empresa sin dominio — enrich Apollo no puede" };
 
-  // D2: skip si fue enriquecida en los últimos 30 días (ya tenemos data fresca).
+  // D2: skip si fue enriquecida en los últimos 7 días (ya tenemos data fresca).
   // Esto previene gastar créditos por dobles clics o flows reiterativos.
   if (company.sector && company.last_apollo_sync_at) {
     const ageDays = (Date.now() - new Date(company.last_apollo_sync_at as string).getTime()) / 86400000;
-    if (ageDays < 30) {
+    if (ageDays < 7) {
+      const remaining = Math.ceil(7 - ageDays);
       return {
         success: true,
         skipped: true,
-        reason: `Ya enriquecida hace ${Math.floor(ageDays)} días — esperá 30 días o usá "Re-enrich" forzado.`,
+        reason: `Ya enriquecida hace ${Math.floor(ageDays)} día${Math.floor(ageDays) !== 1 ? "s" : ""}. Podés volver a enriquecer en ${remaining} día${remaining !== 1 ? "s" : ""}.`,
       };
     }
   }
@@ -447,28 +449,28 @@ export async function generateBriefAction(orgSlug: string, companyId: string) {
 
 Generá el brief siguiendo el formato del system prompt.`;
 
-  const systemPrompt = `Sos un analista B2B que escribe briefs ejecutivos sobre empresas argentinas para un equipo de ventas de Yacaré (estudio de diseño y desarrollo digital con foco en IA para PYMEs).
-
-Cada brief tiene exactamente 4 oraciones cortas, 80-130 palabras totales:
-1. Qué hace la empresa (industria, tamaño, modelo)
-2. Por qué está en el radar (crecimiento, señales recientes, financiera)
-3. Por qué Yacaré podría serle útil (pitch específico, no genérico)
-4. Riesgo o caveat (estado actual, competencia, momento del ciclo)
-
-Tono: directo, sin marketing-speak, sin adjetivos vacíos. Castellano rioplatense neutro. Si faltan datos clave, dejarlo claro en lugar de inventar.`;
-
   try {
     const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model,
-        max_tokens: 400,
-        system: systemPrompt,
+        // 250 alcanza para los 3-4 oraciones del brief; rara vez llegamos a 200.
+        max_tokens: 250,
+        // System prompt extendido (>1024 tokens) con cache_control = 90% off
+        // en input tokens en cache hits (TTL 5min). Compartido con el batch job.
+        system: [
+          {
+            type: "text",
+            text: BRIEF_SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
         messages: [{ role: "user", content: userPrompt }],
       }),
     });

@@ -2,8 +2,10 @@ name: Daily Scrape
 
 on:
   schedule:
-    # Lunes a sábado 9am UTC = 6am Argentina
-    - cron: "0 9 * * 1-6"
+    # Lunes/miércoles/viernes 9am UTC = 6am Argentina.
+    # 3x/semana es suficiente: las empresas top-growth no cambian día a día.
+    # Bajamos de 6x/semana → 3x/semana para mitad de consumo en GitHub Actions.
+    - cron: "0 9 * * 1,3,5"
   workflow_dispatch:
     inputs:
       top_growth:

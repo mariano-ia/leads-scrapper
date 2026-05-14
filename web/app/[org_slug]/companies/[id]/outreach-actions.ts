@@ -102,7 +102,9 @@ Tu respuesta debe ser SOLO un JSON válido con la estructura:
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1500,
+        // 600 alcanza para email outreach 3-5 párrafos + JSON wrapping. Si Claude
+        // se queda corto, el frontend muestra warning y se puede regenerar.
+        max_tokens: 600,
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
       }),

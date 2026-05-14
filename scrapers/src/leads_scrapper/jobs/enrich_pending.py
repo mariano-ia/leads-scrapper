@@ -1,17 +1,23 @@
 """Enriquecimiento automático de companies que cumplen criterio de fit.
 
+⚠️  DEPRECADO PARA CRON (2026-05-14).
+La estrategia post-auditoría es enrich on-demand: solo cuando una empresa
+entra al radar (vía `addToRadarAction` o `qualifyCompanyAction` en la UI).
+Eso reduce drásticamente el consumo de créditos Apollo.
+
+Este job queda disponible para casos puntuales (e.g. backfill manual sobre
+una lista pre-filtrada), pero NO debe correrse desde GitHub Actions.
+
+Si querés correrlo a mano:
+  python -m leads_scrapper.jobs.enrich_pending --limit 50 --dry-run   # ver qué haría
+  python -m leads_scrapper.jobs.enrich_pending --limit 50              # ejecutar
+
 Estrategia: gastamos créditos Apollo enrichment solo en empresas que valen.
 Criterio default (configurable via env):
   - dominio IS NOT NULL          (sin dominio, Apollo enrich casi no funciona)
   - growth_12m > 5%              (empresa con momentum)
   - organization_revenue > $1M   (descarta freelancers y empresas chicas)
   - sector IS NULL               (todavía no enriquecida)
-
-Para cada empresa que matchea: llama Apollo /organizations/enrich (1 crédito),
-actualiza columnas (sector, subsector, headcount_range, city, state, technologies).
-
-Invocación:
-  python -m leads_scrapper.jobs.enrich_pending [--limit N] [--min-growth 0.05] [--dry-run]
 """
 
 import argparse
