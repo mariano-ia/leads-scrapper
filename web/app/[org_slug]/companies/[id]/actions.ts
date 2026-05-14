@@ -24,12 +24,25 @@ export async function enrichCompanyAction(orgSlug: string, companyId: string) {
 
   const { data: company } = await svc
     .from("companies")
-    .select("id, dominio, apollo_id, apollo_data")
+    .select("id, dominio, apollo_id, apollo_data, last_apollo_sync_at, sector")
     .eq("id", companyId)
     .single();
 
   if (!company) return { error: "Empresa no encontrada" };
   if (!company.dominio) return { error: "Empresa sin dominio — enrich Apollo no puede" };
+
+  // D2: skip si fue enriquecida en los últimos 30 días (ya tenemos data fresca).
+  // Esto previene gastar créditos por dobles clics o flows reiterativos.
+  if (company.sector && company.last_apollo_sync_at) {
+    const ageDays = (Date.now() - new Date(company.last_apollo_sync_at as string).getTime()) / 86400000;
+    if (ageDays < 30) {
+      return {
+        success: true,
+        skipped: true,
+        reason: `Ya enriquecida hace ${Math.floor(ageDays)} días — esperá 30 días o usá "Re-enrich" forzado.`,
+      };
+    }
+  }
 
   // Budget check
   const ym = new Date().toISOString().slice(0, 7); // YYYY-MM

@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
+import { resolveUserEmails } from "@/lib/user-emails";
 import { formatDate, initials } from "@/lib/utils";
 
 export default async function MembersPage({ params }: { params: { org_slug: string } }) {
@@ -16,10 +17,8 @@ export default async function MembersPage({ params }: { params: { org_slug: stri
     .select("id, role, joined_at, user_id")
     .eq("org_id", org.id);
 
-  // Fetch user emails (auth.admin.listUsers — we filter client-side)
   const userIds = (members || []).map((m) => m.user_id);
-  const { data: usersList } = await svc.auth.admin.listUsers();
-  const userMap = new Map(usersList.users.map((u) => [u.id, u.email || "?"]));
+  const userMap = await resolveUserEmails(userIds);
 
   const { data: invitations } = await svc
     .from("invitations")

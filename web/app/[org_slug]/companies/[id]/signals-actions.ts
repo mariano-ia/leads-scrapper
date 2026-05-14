@@ -22,6 +22,21 @@ function cleanRS(rs: string): string {
   return rs.trim().replace(/\b(s\.?a\.?|srl|s\.?r\.?l\.?|sas|s\.?a\.?s\.?)\b\.?$/i, "").replace(/[.,\s]+$/, "") || rs;
 }
 
+/**
+ * Strip cualquier tag HTML del input (Google News a veces devuelve <a>, <b>, etc.
+ * en el title/description). Defensa contra stored XSS si el UI llegara a
+ * renderizar con dangerouslySetInnerHTML.
+ */
+function sanitizeText(input: string | null | undefined, maxLen = 500): string {
+  if (!input) return "";
+  return input
+    .replace(/<[^>]*>/g, " ")           // strip tags
+    .replace(/&[a-z]+;/gi, " ")         // strip html entities
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
 function categorize(title: string, summary: string): { category: string; weight: number } {
   const t = `${title} ${summary}`.toLowerCase();
   if (/(ronda|funding|inversi[oó]n|invierte|recauda|capital seed|serie [a-c])/.test(t)) return { category: "funding_round", weight: 40 };
@@ -96,12 +111,14 @@ export async function fetchSignalsForCompanyAction(orgSlug: string, companyId: s
       const occurred = pubDate ? new Date(pubDate) : new Date();
       if (isNaN(occurred.getTime()) || occurred < cutoff) continue;
 
-      const { category, weight } = categorize(title, summary);
+      const cleanTitle = sanitizeText(title, 300);
+      const cleanSummary = sanitizeText(summary, 500);
+      const { category, weight } = categorize(cleanTitle, cleanSummary);
       items.push({
-        title,
+        title: cleanTitle,
         link,
-        summary: summary.slice(0, 500),
-        source,
+        summary: cleanSummary,
+        source: sanitizeText(source, 100),
         occurred_at: occurred.toISOString(),
         category,
         weight,

@@ -2,6 +2,41 @@
 
 Registro cronológico de lo que se construyó, sesión por sesión. Cada entrada incluye fecha, qué se hizo, decisiones importantes, y qué quedó pendiente. El "porqué" detrás de las decisiones grandes está en `docs/decisions/`.
 
+## 2026-05-14 · Sesión 9: Remediación completa de auditoría (74 findings)
+
+### Seguridad — críticos resueltos
+- **S1** SQL injection en `companies/page.tsx:106`: agregado validación UUID strict regex sobre `radarIds` antes de interpolar.
+- **S2** Webhook Svix: instalado `svix` npm package + `Webhook.verify(body, headers)` constant-time. Endpoint `/api/resend/webhook` ahora valida HMAC-SHA256 real.
+- **S3** Vista `apollo_credit_summary` → `SECURITY INVOKER` (migration 0015).
+- **S4** REVOKE EXECUTE en funciones SECURITY DEFINER: trigger functions (rescore + signal), `rescore_org_companies_for_company`, `is_super_admin`/`user_is_admin_of`/`user_is_member_of` para `anon`.
+- **S10** Security headers en `next.config.mjs`: CSP, X-Frame-Options=DENY, X-Content-Type-Options=nosniff, Referrer-Policy=strict-origin-when-cross-origin, Permissions-Policy, HSTS.
+
+### Performance — alto ROI
+- **T1** Reemplazado `auth.admin.listUsers()` por vista `public.user_emails` (security_invoker) + helper `lib/user-emails.ts` con cache 5min in-memory. Aplicado en `radar/page.tsx`, `companies/[id]/page.tsx`, `members/page.tsx`. Ahorro: ~500ms por pageload SSR.
+- **T2** Migration 0016 con 22 índices FK covering (flagged por Supabase advisor) + compound `(status, sector)` y `(status, growth)` partial WHERE active.
+- **RLS perf** Reemplazado `auth.uid()` por `(SELECT auth.uid())` en 7 policies (companies, company_contacts, signals, signal_type_config, scrape_runs, super_admins, org_company_notes) — evita re-evaluación per-row.
+
+### Data acquisition
+- **D1** RPC `companies_fuzzy_by_name(q, threshold)` con pg_trgm — habilita fuzzy match en BO scraper (migration 0018). Activado fallback por razón social en `scrape_bo.py` cuando CUIT no matchea.
+- **D2** `enrichCompanyAction` ahora skipea si `last_apollo_sync_at < 30 días` y ya hay sector → ahorra créditos por doble-click.
+- **D5** Columna `signals.title_hash` (SHA256 lowercase trim) + trigger que la mantiene + UNIQUE index `(company_id, title_hash)` → dedup automático entre URLs distintas con mismo título (migration 0017).
+- **Signal decay** Función `apply_signal_decay()` que aplica decay exponencial usando `decay_half_life_days` + purga signals < 1.0 y > 1 año. Correr 1x/mes via cron.
+
+### Sanitización inputs/outputs
+- **S5** Validación de email RFC-ish en `sendOutreachDraftAction` antes de mandar a Resend (filtra `email_not_unlocked@*` y mal formados).
+- **S8** `llm_filter_text` en searches: cap a 1000 chars + replace `system:`/`assistant:`/`user:` por `[REDACTED]:` para mitigar prompt injection.
+- **S15** Nuevo `sanitizeText()` en `signals-actions.ts` que strippea tags HTML y entities antes de persistir signals desde Google News.
+
+### Anthropic Batch API
+- Nuevo job `generate_briefs_batch.py` que usa `/v1/messages/batches` (header `anthropic-beta: message-batches-2024-09-24`). **50% más barato** que el sync. Submit + poll + download flow completo. El original `generate_briefs.py` queda como fallback para casos on-demand.
+
+### UX
+- **U1 Mobile sidebar**: hamburger menu + drawer con backdrop. Sidebar desktop se mantiene en `md:flex`.
+- **U2 Empty state radar**: card grande con icon + 2 CTAs ("Crear search" / "Buscar en universo") + descripción del flow.
+- **U3 Responsive `/companies`**: `hidden md:table-cell` y `hidden lg:table-cell` en columnas Domain/Fundada/Revenue/Growth24/Fit/Intent para que mobile muestre solo lo esencial.
+- **U4 Breadcrumbs en `/companies/[id]`**: detecta referer; si vino del radar, "← Radar > Empresa", sino "← Companies > Empresa".
+- **U5 Dialog confirm en outreach**: reemplaza `window.confirm()` por shadcn Dialog con preview del subject + primeras líneas del body antes de mandar.
+
 ## 2026-05-13 · Sesión 8: Auto-rescore SQL + filtros companies + Resend webhook + 2da query news
 
 ### Auto-rescore tras cada cambio (trigger SQL, migration 0014)

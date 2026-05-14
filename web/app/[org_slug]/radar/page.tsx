@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp, Database, Info } from "lucide-react";
+import { Sparkles, ArrowRight, Linkedin, ExternalLink, TrendingUp, Database, Info, Plus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { SortableHeader } from "@/components/sortable-header";
 import { RescoreButton } from "./rescore-button";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
+import { resolveUserEmails } from "@/lib/user-emails";
 import { formatNumber, formatPercent, formatRevenue, timeAgo } from "@/lib/utils";
 
 const STATUS_FILTERS = ["all", "new", "reviewed", "qualified", "in_pipeline", "disqualified"] as const;
@@ -101,10 +102,10 @@ export default async function RadarPage({
     .select("user_id")
     .eq("org_id", org.id);
   const memberUserIds = (memberRows || []).map((m) => m.user_id);
-  const { data: usersList } = await svc.auth.admin.listUsers();
+  const emailMap = await resolveUserEmails(memberUserIds);
   const members = memberUserIds.map((id) => ({
     user_id: id,
-    email: usersList?.users.find((u) => u.id === id)?.email || id,
+    email: emailMap.get(id) || id,
   }));
 
   return (
@@ -268,8 +269,29 @@ export default async function RadarPage({
             })}
             {(!rows || rows.length === 0) && (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground py-12">
-                  Sin empresas en el radar todavía. Creá una <Link href={`/${org.slug}/searches/new`} className="text-blue-600 hover:underline">search</Link> para empezar.
+                <TableCell colSpan={9} className="py-12">
+                  <div className="flex flex-col items-center gap-3 text-center max-w-md mx-auto">
+                    <div className="rounded-full bg-muted p-3">
+                      <Sparkles className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-base">Tu radar está vacío</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Cargá empresas calificadas para empezar a hacer outreach con datos.
+                      </p>
+                    </div>
+                    <div className="flex gap-2 flex-wrap justify-center pt-1">
+                      <Link href={`/${org.slug}/searches/new`}>
+                        <Button size="sm"><Plus className="h-3 w-3" /> Crear search</Button>
+                      </Link>
+                      <Link href={`/${org.slug}/companies`}>
+                        <Button size="sm" variant="outline">Buscar en universo</Button>
+                      </Link>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground pt-2">
+                      Las searches filtran las 23.7K empresas del universo Apollo + corren signals automáticamente.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             )}

@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ExternalLink, Linkedin, Phone, Globe, Building2, Mail, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { ArrowLeft, ExternalLink, Linkedin, Phone, Globe, Building2, Mail, ShieldCheck, ShieldQuestion, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
+import { resolveUserEmails } from "@/lib/user-emails";
 import { formatPercent, formatDate, timeAgo, formatRevenue } from "@/lib/utils";
 import { CompanyActions } from "./action-buttons";
 import { NotesPanel } from "@/components/notes-panel";
@@ -41,11 +43,9 @@ export default async function CompanyDetailPage({
       .eq("org_company_id", orgCompanyRes.data.id)
       .order("created_at", { ascending: false });
     if (notes && notes.length > 0) {
-      // Resolve author emails
       const userIds = Array.from(new Set(notes.map((n) => n.author_user_id)));
-      const { data: usersList } = await svc.auth.admin.listUsers();
-      const emailById = new Map((usersList?.users || []).map((u) => [u.id, u.email]));
-      notesData = notes.map((n) => ({ ...n, author_email: emailById.get(n.author_user_id) || "?" }));
+      const emailMap = await resolveUserEmails(userIds);
+      notesData = notes.map((n) => ({ ...n, author_email: emailMap.get(n.author_user_id) || "?" }));
     }
   }
 
@@ -54,15 +54,23 @@ export default async function CompanyDetailPage({
 
   const isEnriched = Boolean(company.sector || company.headcount_range);
 
+  // Breadcrumb dinámico: si el referer fue /radar volvemos a radar, sino companies
+  const referer = headers().get("referer") || "";
+  const cameFromRadar = referer.includes(`/${org.slug}/radar`);
+  const backHref = cameFromRadar ? `/${org.slug}/radar` : `/${org.slug}/companies`;
+  const backLabel = cameFromRadar ? "Radar" : "Companies";
+
   return (
     <div className="space-y-4 max-w-6xl">
-      <div className="flex items-center justify-between">
-        <Link href={`/${org.slug}/companies`}>
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="h-4 w-4" />
-            Volver
-          </Button>
-        </Link>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <nav className="flex items-center gap-1 text-sm text-muted-foreground">
+          <Link href={backHref} className="hover:text-foreground inline-flex items-center gap-1">
+            <ArrowLeft className="h-3.5 w-3.5" />
+            {backLabel}
+          </Link>
+          <ChevronRight className="h-3.5 w-3.5" />
+          <span className="text-foreground truncate max-w-[260px]">{company.razon_social}</span>
+        </nav>
         <div className="flex items-center gap-2">
           <AddToRadarButton orgSlug={org.slug} companyId={company.id} inRadar={Boolean(orgCompanyRes.data)} />
           <CompanyActions

@@ -4,6 +4,17 @@ import { revalidatePath } from "next/cache";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
 
+// RFC 5322-ish validation. No es 100% pero capta el 99% de errores reales sin
+// requerir librería externa. Apollo a veces devuelve email_not_unlocked@domain.com
+// que querríamos rechazar igual.
+const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+function isValidEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  if (email.length > 254) return false;
+  if (email.includes("email_not_unlocked")) return false;
+  return EMAIL_RE.test(email);
+}
+
 /**
  * Genera un draft de email de outreach personalizado con Claude.
  * No envía nada — solo crea un row en outreach_messages con status='draft'.
@@ -166,6 +177,10 @@ export async function sendOutreachDraftAction(orgSlug: string, draftId: string) 
     .single();
   if (!draft) return { error: "Draft no encontrado" };
   if (draft.status !== "draft") return { error: `El draft ya está en estado ${draft.status}` };
+  if (!isValidEmail(draft.to_email as string)) {
+    await svc.from("outreach_messages").update({ status: "failed" }).eq("id", draftId);
+    return { error: `Email destinatario inválido: ${draft.to_email}` };
+  }
 
   try {
     const resendRes = await fetch("https://api.resend.com/emails", {

@@ -103,7 +103,13 @@ export default async function CompaniesPage({
     // Empty radar → no results
     query = query.eq("id", "00000000-0000-0000-0000-000000000000");
   } else if (radarFilter === "no" && radarIds && radarIds.length > 0) {
-    query = query.not("id", "in", `(${radarIds.join(",")})`);
+    // Validar que cada id sea un UUID estricto antes de inyectar como filtro.
+    // Defensa contra SQL injection si el formato de UUID se relaja en el futuro.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const safeIds = radarIds.filter((id) => UUID_RE.test(id));
+    if (safeIds.length > 0) {
+      query = query.not("id", "in", `(${safeIds.join(",")})`);
+    }
   }
 
   const { data: companies, count } = await query;
@@ -229,24 +235,24 @@ export default async function CompaniesPage({
               <TableHead>
                 <SortableHeader label="Empresa" sortKey="name" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
-              <TableHead>
+              <TableHead className="hidden md:table-cell">
                 <SortableHeader label="Dominio" sortKey="domain" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
-              <TableHead>
+              <TableHead className="hidden lg:table-cell">
                 <SortableHeader label="Fundada" sortKey="founded" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
-              <TableHead>
+              <TableHead className="hidden lg:table-cell">
                 <SortableHeader label="Revenue" sortKey="revenue" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
               <TableHead>
                 <SortableHeader label="Growth 12m" sortKey="growth_12m" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
-              <TableHead>
+              <TableHead className="hidden xl:table-cell">
                 <SortableHeader label="Growth 24m" sortKey="growth_24m" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
               <TableHead title="Score combinado en el radar de esta org (solo si está agregada)">Score</TableHead>
-              <TableHead title="Fit score: qué tan bien matchea al ICP de tu última search">Fit</TableHead>
-              <TableHead title="Intent score: growth + Apollo intent + signals recientes">Intent</TableHead>
+              <TableHead className="hidden md:table-cell" title="Fit score: qué tan bien matchea al ICP de tu última search">Fit</TableHead>
+              <TableHead className="hidden md:table-cell" title="Intent score: growth + Apollo intent + signals recientes">Intent</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -282,7 +288,7 @@ export default async function CompaniesPage({
                     </div>
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell className="text-muted-foreground hidden md:table-cell">
                   {c.primary_domain ? (
                     <a href={`https://${c.primary_domain}`} target="_blank" rel="noopener" className="inline-flex items-center gap-1 hover:text-foreground hover:underline">
                       {c.primary_domain}
@@ -290,17 +296,17 @@ export default async function CompaniesPage({
                     </a>
                   ) : "—"}
                 </TableCell>
-                <TableCell>{c.founded_year || "—"}</TableCell>
-                <TableCell className="text-muted-foreground">
+                <TableCell className="hidden lg:table-cell">{c.founded_year || "—"}</TableCell>
+                <TableCell className="text-muted-foreground hidden lg:table-cell">
                   {formatRevenue(c.organization_revenue, c.organization_revenue_printed)}
                 </TableCell>
                 <TableCell>{growthBadge(c.organization_headcount_twelve_month_growth)}</TableCell>
-                <TableCell>{growthBadge(c.organization_headcount_twenty_four_month_growth)}</TableCell>
+                <TableCell className="hidden xl:table-cell">{growthBadge(c.organization_headcount_twenty_four_month_growth)}</TableCell>
                 <TableCell>{scoreBadge(scoresByCompany.get(c.id)?.combined)}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">
+                <TableCell className="text-xs text-muted-foreground hidden md:table-cell">
                   {scoresByCompany.get(c.id) ? (scoresByCompany.get(c.id)!.fit * 100).toFixed(0) : "—"}
                 </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
+                <TableCell className="text-xs text-muted-foreground hidden md:table-cell">
                   {scoresByCompany.get(c.id) ? (scoresByCompany.get(c.id)!.intent * 100).toFixed(0) : "—"}
                 </TableCell>
                 <TableCell className="text-right">

@@ -115,7 +115,7 @@ async def run(*, date_str: str | None = None, dry_run: bool = False) -> int:
         run_id = None
     else:
         r = supabase.table("scrape_runs").insert(run_row).execute()
-        run_id = r.data[0]["id"]
+        run_id = (r.data[0] if r.data else {}).get("id") if isinstance(r.data, list) else None  # type: ignore[union-attr]
 
     logger.info("starting BO scrape", extra={"date": date_str, "dry_run": dry_run})
 
@@ -138,8 +138,18 @@ async def run(*, date_str: str | None = None, dry_run: bool = False) -> int:
     for aviso in avisos:
         cuit = aviso.get("cuit")
         company = _match_company_by_cuit(supabase, cuit) if cuit else None
+
+        # Fallback fuzzy match por razon_social cuando no hay CUIT match.
+        # Apollo no popula CUIT así que la mayoría de matches va por acá.
         if company is None:
-            # Skip fuzzy match for now — pg_trgm RPC requires custom function. F0.5 task.
+            title = aviso.get("title") or ""
+            # Extraer razón social desde el título (heurística: primera frase larga antes
+            # de palabras como "SA", "SRL", "SAS" o coma).
+            candidate_name = title.split(",")[0].split(" - ")[0].strip()
+            if len(candidate_name) >= 6:
+                company = _match_company_by_name(supabase, candidate_name)
+
+        if company is None:
             unmatched += 1
             if not dry_run and cuit:
                 _upsert_candidate(supabase, aviso, source="bo_nacional")

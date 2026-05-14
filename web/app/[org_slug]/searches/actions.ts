@@ -11,7 +11,13 @@ export async function updateSearchAction(orgSlug: string, searchId: string, form
   const { org } = await requireOrgMembership(orgSlug, user.id);
 
   const name = (formData.get("name") as string)?.trim();
-  const llmFilter = (formData.get("llm_filter_text") as string)?.trim() || null;
+  const rawLlm = (formData.get("llm_filter_text") as string)?.trim() || "";
+  // S8: cap length + filtrar prompt injection obvio (no es defensa total pero ayuda)
+  const llmFilter = rawLlm
+    ? rawLlm
+        .slice(0, 1000)
+        .replace(/(?:^|\n)\s*(system|assistant|user)\s*[:>]/gi, "[REDACTED]:")
+    : null;
   const alertEnabled = formData.get("alert_enabled") === "on";
   const alertEmail = (formData.get("alert_email") as string)?.trim() || user.email || null;
   const headcountMin = Number(formData.get("headcount_min")) || null;
@@ -66,7 +72,13 @@ export async function createSearchAction(orgSlug: string, formData: FormData) {
   const { org } = await requireOrgMembership(orgSlug, user.id);
 
   const name = (formData.get("name") as string)?.trim();
-  const llmFilter = (formData.get("llm_filter_text") as string)?.trim() || null;
+  const rawLlm = (formData.get("llm_filter_text") as string)?.trim() || "";
+  // S8: cap length + filtrar prompt injection obvio (no es defensa total pero ayuda)
+  const llmFilter = rawLlm
+    ? rawLlm
+        .slice(0, 1000)
+        .replace(/(?:^|\n)\s*(system|assistant|user)\s*[:>]/gi, "[REDACTED]:")
+    : null;
   const alertEnabled = formData.get("alert_enabled") === "on";
   const alertEmail = (formData.get("alert_email") as string)?.trim() || user.email || null;
 
