@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "cd web && npm install --no-audit --no-fund --prefer-offline && npm run build",
-  "installCommand": "echo deferred-to-build",
-  "outputDirectory": "web/.next",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- web/ supabase/ vercel.json package.json"
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ':!scrapers/' ':!docs/' ':!supabase/'"
 }

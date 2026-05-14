@@ -14,18 +14,15 @@ jobs:
   web:
     name: Web · lint + test + typecheck + build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version-file: web/.nvmrc
+          node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install
         run: npm ci
