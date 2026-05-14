@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { requireAuth, requireOrgMembership } from "@/lib/auth";
-import { scoreCompany } from "@/lib/scoring";
 
 export async function updateSearchAction(orgSlug: string, searchId: string, formData: FormData) {
   const user = await requireAuth();
@@ -130,43 +129,12 @@ export async function createSearchAction(orgSlug: string, formData: FormData) {
 
   if (error) return { error: error.message };
 
-  // Backfill org_companies: top empresas que matcheen growth > 0 dentro de los fit filters
-  if (searchRow) {
-    let q = svc
-      .from("companies")
-      .select(
-        "id, sector, subsector, headcount_range, founded_year, organization_revenue, organization_headcount_twelve_month_growth, intent_strength"
-      )
-      .eq("status", "active")
-      .order("organization_headcount_twelve_month_growth", { ascending: false, nullsFirst: false })
-      .limit(500);
-    if (foundedMin != null) {
-      q = q.gte("founded_year", foundedMin);
-    }
-    const { data: candidates } = await q;
-    if (candidates && candidates.length > 0) {
-      const now = new Date().toISOString();
-      const rows = candidates
-        .map((c: any) => {
-          const scores = scoreCompany(c, filters, 0);
-          return {
-            org_id: org.id,
-            company_id: c.id,
-            last_search_id: searchRow.id,
-            first_matched_at: now,
-            last_fit_score: scores.fit,
-            last_intent_score: scores.intent,
-            last_combined_score: scores.combined,
-            status: "new",
-          };
-        })
-        // Solo poblar las que pasen min_combined_score (0.3 default)
-        .filter((r) => r.last_combined_score >= 0.3);
-      if (rows.length > 0) {
-        await svc.from("org_companies").upsert(rows, { onConflict: "org_id,company_id", ignoreDuplicates: false });
-      }
-    }
-  }
+  // NOTA: NO hacemos backfill automático del radar al crear una search.
+  // Decisión 2026-05-14 tras feedback del usuario: la search es un FILTRO sobre
+  // el universo, no un trigger que mete 500 empresas al radar de golpe.
+  // El usuario agrega empresas al radar manualmente desde /companies (botón
+  // "+ Radar") o las searches activas en cron evalúan signals nuevos y traen
+  // los matches relevantes — no la primera vez que se crea la search.
 
   revalidatePath(`/${orgSlug}/searches`);
   redirect(`/${orgSlug}/searches`);

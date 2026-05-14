@@ -22,6 +22,15 @@ const SORT_MAP: Record<string, string> = {
   growth_24m: "organization_headcount_twenty_four_month_growth",
 };
 
+// Sorts que viven en org_companies (no en companies). Cuando se piden, hacemos
+// un pre-fetch de org_companies ordenado + filtrado por estos IDs en companies.
+const SCORE_SORTS = new Set(["score", "fit", "intent"]);
+const ORG_SORT_COLUMN: Record<string, string> = {
+  score: "last_combined_score",
+  fit: "last_fit_score",
+  intent: "last_intent_score",
+};
+
 export default async function CompaniesPage({
   params,
   searchParams,
@@ -51,9 +60,14 @@ export default async function CompaniesPage({
 
   const page = Math.max(1, parseInt(searchParams.page || "1", 10));
   const q = (searchParams.q || "").trim();
-  const sortKey = searchParams.sort && SORT_MAP[searchParams.sort] ? searchParams.sort : "growth_12m";
+  const rawSort = searchParams.sort || "";
+  const sortKey =
+    SORT_MAP[rawSort] !== undefined ? rawSort
+    : SCORE_SORTS.has(rawSort) ? rawSort
+    : "growth_12m";
   const order: "asc" | "desc" = searchParams.order === "asc" ? "asc" : "desc";
-  const sortColumn = SORT_MAP[sortKey];
+  const isScoreSort = SCORE_SORTS.has(sortKey);
+  const sortColumn = isScoreSort ? null : SORT_MAP[sortKey];
   const offset = (page - 1) * PAGE_SIZE;
 
   const sectorFilter = (searchParams.sector || "").trim();
@@ -73,15 +87,43 @@ export default async function CompaniesPage({
     radarIds = (radarRows || []).map((r) => r.company_id as string);
   }
 
+  // Si sort es score/fit/intent: pre-fetch IDs desde org_companies ordenados,
+  // luego trae companies filtrando por esos IDs (solo empresas en radar tienen score).
+  let scoreSortedIds: string[] | null = null;
+  let scoreSortedTotal = 0;
+  if (isScoreSort) {
+    const orgCol = ORG_SORT_COLUMN[sortKey];
+    const { data: ocRows, count: ocCount } = await svc
+      .from("org_companies")
+      .select("company_id", { count: "exact" })
+      .eq("org_id", org.id)
+      .order(orgCol, { ascending: order === "asc", nullsFirst: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+    scoreSortedIds = (ocRows || []).map((r: any) => r.company_id);
+    scoreSortedTotal = ocCount || 0;
+  }
+
   let query = svc
     .from("companies")
     .select(
       "id, name:razon_social, primary_domain:dominio, linkedin_url, founded_year, organization_revenue, organization_revenue_printed, organization_headcount_twelve_month_growth, organization_headcount_twenty_four_month_growth, sector, headcount_range, location_ciudad, ai_brief, intent_strength",
       { count: "exact" }
     )
-    .eq("status", "active")
-    .order(sortColumn, { ascending: order === "asc", nullsFirst: false })
-    .range(offset, offset + PAGE_SIZE - 1);
+    .eq("status", "active");
+
+  if (isScoreSort) {
+    // Para sort por score, traemos solo los IDs del radar pre-ordenados.
+    if (scoreSortedIds && scoreSortedIds.length > 0) {
+      query = query.in("id", scoreSortedIds);
+    } else {
+      // Radar vacío con sort por score → sin resultados
+      query = query.eq("id", "00000000-0000-0000-0000-000000000000");
+    }
+  } else if (sortColumn) {
+    query = query
+      .order(sortColumn, { ascending: order === "asc", nullsFirst: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+  }
 
   if (q) query = query.ilike("razon_social", `%${q}%`);
   if (sectorFilter) query = query.ilike("sector", `%${sectorFilter}%`);
@@ -112,7 +154,13 @@ export default async function CompaniesPage({
     }
   }
 
-  const { data: companies, count } = await query;
+  let { data: companies, count } = await query;
+  // Si es sort por score, re-ordenamos según scoreSortedIds (in() no preserva orden)
+  if (isScoreSort && scoreSortedIds && companies) {
+    const byId = new Map((companies as any[]).map((c) => [c.id, c]));
+    companies = scoreSortedIds.map((id) => byId.get(id)).filter(Boolean) as any;
+    count = scoreSortedTotal;
+  }
   const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
 
   // Look up which of the visible companies are already on this org's radar
@@ -250,9 +298,15 @@ export default async function CompaniesPage({
               <TableHead className="hidden xl:table-cell">
                 <SortableHeader label="Growth 24m" sortKey="growth_24m" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
               </TableHead>
-              <TableHead title="Score combinado en el radar de esta org (solo si está agregada)">Score</TableHead>
-              <TableHead className="hidden md:table-cell" title="Fit score: qué tan bien matchea al ICP de tu última search">Fit</TableHead>
-              <TableHead className="hidden md:table-cell" title="Intent score: growth + Apollo intent + signals recientes">Intent</TableHead>
+              <TableHead title="Score combinado en el radar de esta org (sort sólo muestra empresas en radar)">
+                <SortableHeader label="Score" sortKey="score" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
+              </TableHead>
+              <TableHead className="hidden md:table-cell" title="Fit score: qué tan bien matchea al ICP">
+                <SortableHeader label="Fit" sortKey="fit" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
+              </TableHead>
+              <TableHead className="hidden md:table-cell" title="Intent score: growth + Apollo intent + signals recientes">
+                <SortableHeader label="Intent" sortKey="intent" basePath={basePath} currentSort={sortKey} currentOrder={order} preservedParams={preservedParams} />
+              </TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
