@@ -28,9 +28,8 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
-  experimental: {
-    typedRoutes: true,
-  },
+  // typedRoutes desactivado: rompe builds con rutas dinámicas (href={variable}).
+  // Lo reactivamos cuando todos los Links usen literals o helper de typed paths.
   async headers() {
     return [
       {

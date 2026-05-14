@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
           for (const c of cookiesToSet) {
             sessionCookies.push({ name: c.name, value: c.value, options: c.options });
           }
