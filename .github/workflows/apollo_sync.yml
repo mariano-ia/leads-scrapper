@@ -2,7 +2,6 @@ name: Apollo Sync (weekly)
 
 on:
   schedule:
-    # Lunes 7am UTC = 4am Argentina
     - cron: "0 7 * * 1"
   push:
     branches: [main]
@@ -23,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONUNBUFFERED: "1"
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://cdklaxvxngmldpdiihgo.supabase.co' }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -38,19 +37,29 @@ jobs:
           cache: pip
           cache-dependency-path: scrapers/pyproject.toml
 
-      - name: Env presence check
+      - name: Env presence check (no-fail)
+        id: envcheck
         run: |
-          ok=true
-          for k in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY APOLLO_API_KEY ANTHROPIC_API_KEY; do
+          PRESENT=""
+          EMPTY=""
+          for k in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY APOLLO_API_KEY ANTHROPIC_API_KEY RESEND_API_KEY; do
             v="${!k}"
             if [ -z "$v" ]; then
-              echo "::error::secret $k is EMPTY in this run"
-              ok=false
+              EMPTY="$EMPTY $k"
+              echo "::warning::secret $k is EMPTY"
             else
+              PRESENT="$PRESENT $k(len=${#v})"
               echo "secret $k present (len=${#v})"
             fi
           done
-          $ok
+          {
+            echo "present<<EOF"
+            echo "$PRESENT"
+            echo "EOF"
+            echo "empty<<EOF"
+            echo "$EMPTY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install
         working-directory: scrapers
@@ -62,8 +71,6 @@ jobs:
           set -o pipefail
           MODE="${{ github.event.inputs.mode }}"
           : "${MODE:=delta}"
-          # Cap pages para que push-triggered runs no consuman demasiados créditos.
-          # Schedule (lunes nocturno) corre sin cap.
           if [ "${{ github.event_name }}" = "push" ]; then
             EXTRA="--max-pages 2"
           else
@@ -71,14 +78,25 @@ jobs:
           fi
           python -m leads_scrapper.jobs.apollo_sync --mode "$MODE" $EXTRA 2>&1 | tee /tmp/apollo.log
 
-      - name: Report failure to scrape_runs
-        if: failure()
+      - name: Report status to scrape_runs (always)
+        if: always()
         run: |
-          TAIL=$(tail -c 4000 /tmp/apollo.log 2>/dev/null | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          STATUS="${{ job.status }}"
+          PRESENT='${{ steps.envcheck.outputs.present }}'
+          EMPTY='${{ steps.envcheck.outputs.empty }}'
+          if [ -f /tmp/apollo.log ]; then
+            TAIL=$(tail -c 4000 /tmp/apollo.log | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          else
+            TAIL='"(no log file — pre-python failure)"'
+          fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY missing"
+            exit 0
+          fi
           curl -sS -X POST "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/scrape_runs" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
-            -d "{\"source\":\"diag_apollo_sync\",\"status\":\"failed\",\"finished_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"errors\":[{\"run_id\":\"${{ github.run_id }}\",\"stderr_tail\":$TAIL}]}"
-          echo "diagnostic posted to scrape_runs"
+            -d "{\"source\":\"diag_apollo_sync\",\"status\":\"failed\",\"finished_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"errors\":[{\"run_id\":\"${{ github.run_id }}\",\"job_status\":\"$STATUS\",\"secrets_present\":\"$PRESENT\",\"secrets_empty\":\"$EMPTY\",\"stderr_tail\":$TAIL}]}"
+          echo "diagnostic posted"

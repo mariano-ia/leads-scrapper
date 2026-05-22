@@ -29,7 +29,10 @@ jobs:
     timeout-minutes: 90
     env:
       PYTHONUNBUFFERED: "1"
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      # URL Supabase NO es secreto (NEXT_PUBLIC_*, embebido en client bundle).
+      # Hardcodeo como fallback para que el step de diagnóstico SIEMPRE
+      # pueda postear, incluso si los secrets se vaciaron.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || 'https://cdklaxvxngmldpdiihgo.supabase.co' }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
@@ -43,19 +46,29 @@ jobs:
           cache: pip
           cache-dependency-path: scrapers/pyproject.toml
 
-      - name: Env presence check
+      - name: Env presence check (no-fail)
+        id: envcheck
         run: |
-          ok=true
-          for k in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY ANTHROPIC_API_KEY; do
+          PRESENT=""
+          EMPTY=""
+          for k in NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY ANTHROPIC_API_KEY ANTHROPIC_MODEL; do
             v="${!k}"
             if [ -z "$v" ]; then
-              echo "::error::secret $k is EMPTY in this run"
-              ok=false
+              EMPTY="$EMPTY $k"
+              echo "::warning::secret $k is EMPTY"
             else
+              PRESENT="$PRESENT $k(len=${#v})"
               echo "secret $k present (len=${#v})"
             fi
           done
-          $ok
+          {
+            echo "present<<EOF"
+            echo "$PRESENT"
+            echo "EOF"
+            echo "empty<<EOF"
+            echo "$EMPTY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install
         working-directory: scrapers
@@ -66,23 +79,34 @@ jobs:
         working-directory: scrapers
         run: |
           set -o pipefail
-          # Limit defaults to 100 unless triggered via workflow_dispatch
           LIMIT="${{ github.event.inputs.limit }}"
           POLL="${{ github.event.inputs.poll_interval }}"
           : "${LIMIT:=100}"
           : "${POLL:=60}"
           python -m leads_scrapper.jobs.generate_briefs_batch --limit "$LIMIT" --poll-interval "$POLL" 2>&1 | tee /tmp/briefs.log
-          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Report failure to scrape_runs
-        if: failure()
+      - name: Report status to scrape_runs (always)
+        if: always()
         run: |
-          # Capturamos hasta 4000 chars del log para que entre en una columna jsonb cómoda.
-          TAIL=$(tail -c 4000 /tmp/briefs.log 2>/dev/null | python -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          STATUS="${{ job.status }}"
+          PRESENT='${{ steps.envcheck.outputs.present }}'
+          EMPTY='${{ steps.envcheck.outputs.empty }}'
+          if [ -f /tmp/briefs.log ]; then
+            TAIL=$(tail -c 4000 /tmp/briefs.log | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          else
+            TAIL='"(no log file — pre-python failure)"'
+          fi
+          # Si no hay service role, posteo igual con la anon key (read-only RLS).
+          # Pero scrape_runs no admite anon insert; en ese caso simplemente loguea.
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY missing — cannot post diagnostic"
+            echo "{present:$PRESENT empty:$EMPTY status:$STATUS tail:$TAIL}"
+            exit 0
+          fi
           curl -sS -X POST "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/scrape_runs" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
-            -d "{\"source\":\"diag_nightly_briefs_batch\",\"status\":\"failed\",\"finished_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"errors\":[{\"run_id\":\"${{ github.run_id }}\",\"stderr_tail\":$TAIL}]}"
-          echo "diagnostic posted to scrape_runs"
+            -d "{\"source\":\"diag_nightly_briefs_batch\",\"status\":\"failed\",\"finished_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"errors\":[{\"run_id\":\"${{ github.run_id }}\",\"job_status\":\"$STATUS\",\"secrets_present\":\"$PRESENT\",\"secrets_empty\":\"$EMPTY\",\"stderr_tail\":$TAIL}]}"
+          echo "diagnostic posted"
